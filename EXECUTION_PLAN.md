@@ -52,13 +52,26 @@ This is a college project building a blockchain-based e-voting platform. The sys
 **Week:** 1 | **Day:** 1–2 | **Effort:** 4h | **Deps:** TASK-001 | **Critical Path:** YES
 
 Tables (via Flask-Migrate / Alembic):
-- `organizations` — id, name, type
-- `users` — id, role(admin|voter), email, password_hash, phone, aadhaar_hash, wallet_address, org_id FK, firebase_uid, student_id, employee_id, address_line, city, state, pincode, lat, lng
-- `elections` — id, title, type(private|public), state(draft|scheduled|active|completed), org_id FK, contract_address, merkle_root, location_rule_hash, constituency_polygon JSON, start_time, end_time, eligibility_locked, candidates_locked, results_published
-- `candidates` — id, election_id FK, name, party, symbol_url, profile_photo, manifesto, position, status
-- `election_voters` — id, election_id FK, voter_identifier, hashed_identifier, authorization_status
-- `voter_verifications` — id, user_id FK, election_id FK, method(id_verification|address_verification), verified BOOL, verified_at
-- `vote_transactions` — id, election_id FK, user_id FK, wallet_address, tx_hash, candidate_id FK, block_number, cast_at
+
+- `organizations` — id (UUID PK), name, type, created_at
+
+- `users` — user_id (UUID PK), full_name, email (unique), password_hash, phone_number, aadhaar_hash, role ENUM('admin','voter'), wallet_address, organization_id (UUID FK → organizations), student_id (optional), employee_id (optional), address_line, city, state, pincode, latitude FLOAT, longitude FLOAT, status ENUM('active','suspended'), created_at
+  > Note: `firebase_uid` is stored here during TASK-004 auth implementation (not in formal schema but required for Firebase OTP flow)
+
+- `elections` — election_id (UUID PK), title, description TEXT, election_type ENUM('single_seat','multi_seat'), visibility_type ENUM('private','public'), start_time, end_time, eligibility_merkle_root, location_rule_hash, eligibility_locked BOOLEAN, candidates_locked BOOLEAN, candidate_list_hash, contract_address, contract_deployed_at TIMESTAMP, created_by_admin (UUID FK → users), status ENUM('draft','scheduled','active','completed'), results_published BOOLEAN, created_at
+  > `election_type` (single/multi seat) and `visibility_type` (private/public) are separate fields. `candidate_list_hash` is generated when admin finalizes candidates (tamper-proof). `constituency_polygon` is NOT stored in DB — geographic rules are encoded in `location_rule_hash` and resolved at verification time via shapely.
+
+- `constituencies` — constituency_id (UUID PK), election_id (UUID FK → elections), constituency_name, description TEXT, created_at
+  > **New table.** Each election has one or more constituencies (e.g. "CSE Department", "Ward 24"). Candidates and voter lists are scoped to a constituency, not directly to an election.
+
+- `candidates` — candidate_id (UUID PK), constituency_id (UUID FK → constituencies), candidate_name, candidate_identifier (USN/Employee ID for validation), party_name, symbol_url, profile_photo, manifesto TEXT, candidate_position, status ENUM('active','withdrawn','disqualified'), created_at
+
+- `election_voters` — id (UUID PK), constituency_id (UUID FK → constituencies), voter_identifier (raw ID from CSV), hashed_identifier, authorization_status ENUM('authorized'), created_at
+  > Scoped to constituency (not election directly) to support multi-constituency elections.
+
+- `voter_verifications` — id (UUID PK), user_id (UUID FK → users), election_id (UUID FK → elections), method ENUM('id_verification','address_verification'), verified BOOL, verified_at TIMESTAMP
+
+- `vote_transactions` — transaction_id (UUID PK), election_id (UUID FK → elections), voter_id (UUID FK → users), wallet_address, candidate_id (UUID), blockchain_tx_hash (unique), timestamp TIMESTAMP
 
 ---
 

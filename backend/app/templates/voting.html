@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cast Your Vote — Blockchain E-Voting</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 560px;
+      width: 100%;
+    }
+
+    /* ── Header ─────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .header .logo { font-size: 2.5rem; margin-bottom: 0.75rem; }
+
+    .header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 0.3rem;
+    }
+
+    .header .meta {
+      color: #64748b;
+      font-size: 0.85rem;
+    }
+
+    /* ── Election info banner ────────────────── */
+    .election-banner {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+    }
+
+    .election-banner .label { color: #94a3b8; }
+    .election-banner .value { color: #f1f5f9; font-weight: 600; }
+
+    .badge-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: #14532d;
+      color: #86efac;
+      padding: 0.2rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .dot-live {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      display: inline-block;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* ── Candidate cards ─────────────────────── */
+    .section-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.75rem;
+    }
+
+    .candidates { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.75rem; }
+
+    .candidate {
+      background: #1e293b;
+      border: 2px solid #334155;
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .candidate:hover { border-color: #3b82f6; background: #1e2f4a; }
+
+    .candidate.selected {
+      border-color: #3b82f6;
+      background: #1e3a5f;
+    }
+
+    .radio-circle {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      border: 2px solid #475569;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.15s;
+    }
+
+    .candidate.selected .radio-circle {
+      border-color: #3b82f6;
+    }
+
+    .radio-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #3b82f6;
+      display: none;
+    }
+
+    .candidate.selected .radio-dot { display: block; }
+
+    .candidate-avatar {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #1d4ed8, #7c3aed);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .candidate-info { flex: 1; }
+
+    .candidate-name {
+      font-weight: 600;
+      color: #f1f5f9;
+      font-size: 0.95rem;
+    }
+
+    .candidate-party {
+      color: #64748b;
+      font-size: 0.8rem;
+      margin-top: 0.1rem;
+    }
+
+    /* ── Wallet strip ────────────────────────── */
+    .wallet-strip {
+      background: #0f172a;
+      border: 1px solid #1e3a5f;
+      border-radius: 8px;
+      padding: 0.65rem 1rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.82rem;
+    }
+
+    .wallet-strip .label { color: #64748b; }
+    .wallet-strip .addr  { color: #7dd3fc; font-family: monospace; }
+
+    /* ── Submit button ───────────────────────── */
+    .btn-vote {
+      width: 100%;
+      padding: 0.9rem;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    .btn-vote:hover   { background: #1d4ed8; }
+    .btn-vote:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Confirmation overlay ────────────────── */
+    .overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      align-items: center; justify-content: center;
+      z-index: 10;
+    }
+
+    .overlay.show { display: flex; }
+
+    .modal {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      max-width: 380px;
+      width: 90%;
+      text-align: center;
+    }
+
+    .modal .icon { font-size: 2.5rem; margin-bottom: 1rem; }
+    .modal h2 { font-size: 1.2rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.5rem; }
+    .modal p { color: #94a3b8; font-size: 0.875rem; line-height: 1.5; margin-bottom: 1.5rem; }
+
+    .modal-actions { display: flex; gap: 0.75rem; }
+
+    .btn-cancel {
+      flex: 1; padding: 0.75rem;
+      background: #334155; color: #cbd5e1;
+      border: none; border-radius: 8px;
+      font-size: 0.9rem; cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-cancel:hover { background: #475569; }
+
+    .btn-confirm {
+      flex: 1; padding: 0.75rem;
+      background: #2563eb; color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-confirm:hover { background: #1d4ed8; }
+
+    /* ── Footer ──────────────────────────────── */
+    .footer {
+      text-align: center;
+      margin-top: 1.75rem;
+      color: #475569;
+      font-size: 0.78rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">🗳️</div>
+      <h1>Student Council Election 2026</h1>
+      <p class="meta">President · General Seat</p>
+    </div>
+
+    <!-- Election meta banner -->
+    <div class="election-banner">
+      <div>
+        <div class="label">Closes</div>
+        <div class="value">Mar 15, 2026 · 5:00 PM</div>
+      </div>
+      <div>
+        <div class="label">Eligible voters</div>
+        <div class="value">1,240</div>
+      </div>
+      <div>
+        <span class="badge-live"><span class="dot-live"></span> Live</span>
+      </div>
+    </div>
+
+    <!-- Candidate list -->
+    <div class="section-title">Select a candidate</div>
+    <div class="candidates" id="candidates">
+
+      <div class="candidate" data-id="1" onclick="select(this)">
+        <div class="radio-circle"><div class="radio-dot"></div></div>
+        <div class="candidate-avatar">AK</div>
+        <div class="candidate-info">
+          <div class="candidate-name">Aanya Kapoor</div>
+          <div class="candidate-party">Progressive Students Alliance</div>
+        </div>
+      </div>
+
+      <div class="candidate" data-id="2" onclick="select(this)">
+        <div class="radio-circle"><div class="radio-dot"></div></div>
+        <div class="candidate-avatar" style="background: linear-gradient(135deg, #0f766e, #0891b2);">RS</div>
+        <div class="candidate-info">
+          <div class="candidate-name">Rohan Sharma</div>
+          <div class="candidate-party">Independent</div>
+        </div>
+      </div>
+
+      <div class="candidate" data-id="3" onclick="select(this)">
+        <div class="radio-circle"><div class="radio-dot"></div></div>
+        <div class="candidate-avatar" style="background: linear-gradient(135deg, #7c3aed, #db2777);">PM</div>
+        <div class="candidate-info">
+          <div class="candidate-name">Priya Mehta</div>
+          <div class="candidate-party">United Campus Front</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Wallet strip -->
+    <div class="wallet-strip">
+      <span class="label">Voting from wallet</span>
+      <span class="addr">0xaBcD…F123</span>
+    </div>
+
+    <!-- Submit -->
+    <button class="btn-vote" id="voteBtn" disabled onclick="openModal()">
+      Cast Vote via MetaMask
+    </button>
+
+    <p class="footer">Your vote is recorded on-chain and cannot be altered.</p>
+
+  </div>
+
+  <!-- Confirmation modal -->
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <div class="icon">🔐</div>
+      <h2>Confirm your vote</h2>
+      <p>You are about to sign a blockchain transaction. This action is <strong>irreversible</strong>. MetaMask will prompt you to approve.</p>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="btn-confirm" onclick="confirmVote()">Sign & Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let selected = null;
+
+    function select(el) {
+      document.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      selected = el.dataset.id;
+      document.getElementById('voteBtn').disabled = false;
+    }
+
+    function openModal()  { document.getElementById('overlay').classList.add('show'); }
+    function closeModal() { document.getElementById('overlay').classList.remove('show'); }
+
+    function confirmVote() {
+      closeModal();
+      // TODO: trigger MetaMask / Web3 transaction here
+      alert('MetaMask integration coming soon.\nCandidate ID: ' + selected);
+    }
+  </script>
+
+</body>
+</html>
