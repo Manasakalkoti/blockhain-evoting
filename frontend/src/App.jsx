@@ -1,35 +1,35 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import ProtectedRoute from './components/ProtectedRoute'
+import LoginPage from './pages/LoginPage'
+import AdminLoginPage from './pages/AdminLoginPage'
+import ElectionsPage from './pages/ElectionsPage'
+import ElectionDetailPage from './pages/ElectionDetailPage'
+import VotePage from './pages/VotePage'
+import ResultsPage from './pages/ResultsPage'
+import AdminElectionsPage from './pages/admin/AdminElectionsPage'
+import CreateElectionPage from './pages/admin/CreateElectionPage'
+import AdminElectionDetailPage from './pages/admin/AdminElectionDetailPage'
 
-function App() {
-  const [count, setCount] = useState(0)
-
+export default function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    <Routes>
+      {/* Public */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/admin/login" element={<AdminLoginPage />} />
+
+      {/* Voter */}
+      <Route path="/" element={<ProtectedRoute><ElectionsPage /></ProtectedRoute>} />
+      <Route path="/elections/:id" element={<ProtectedRoute><ElectionDetailPage /></ProtectedRoute>} />
+      <Route path="/elections/:id/vote" element={<ProtectedRoute><VotePage /></ProtectedRoute>} />
+      <Route path="/results/:id" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
+
+      {/* Admin */}
+      <Route path="/admin/elections" element={<ProtectedRoute role="admin"><AdminElectionsPage /></ProtectedRoute>} />
+      <Route path="/admin/elections/new" element={<ProtectedRoute role="admin"><CreateElectionPage /></ProtectedRoute>} />
+      <Route path="/admin/elections/:id" element={<ProtectedRoute role="admin"><AdminElectionDetailPage /></ProtectedRoute>} />
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
-
-export default App

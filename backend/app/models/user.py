@@ -15,7 +15,7 @@ class User(db.Model):
     firebase_uid = db.Column(db.String(128), unique=True)
     role = db.Column(db.Enum("admin", "voter"), nullable=False, default="voter")
     wallet_address = db.Column(db.String(42))
-
+    
     # Organization link
     organization_id = db.Column(db.String(36), db.ForeignKey("organizations.organization_id"), nullable=True)
     student_id = db.Column(db.String(100))

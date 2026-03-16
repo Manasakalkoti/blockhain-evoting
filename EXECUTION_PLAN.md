@@ -64,7 +64,7 @@ Tables (via Flask-Migrate / Alembic):
 - `constituencies` — constituency_id (UUID PK), election_id (UUID FK → elections), constituency_name, description TEXT, created_at
   > **New table.** Each election has one or more constituencies (e.g. "CSE Department", "Ward 24"). Candidates and voter lists are scoped to a constituency, not directly to an election.
 
-- `candidates` — candidate_id (UUID PK), constituency_id (UUID FK → constituencies), candidate_name, candidate_identifier (USN/Employee ID for validation), party_name, symbol_url, profile_photo, manifesto TEXT, candidate_position, status ENUM('active','withdrawn','disqualified'), created_at
+- `candidates` — candidate_id (UUID PK), constituency_id (UUID FK → e), candidate_name, candidate_identifier (USN/Employee ID for validation), party_name, symbol_url, profile_photo, manifesto TEXT, candidate_position, status ENUM('active','withdrawn','disqualified'), created_at
 
 - `election_voters` — id (UUID PK), constituency_id (UUID FK → constituencies), voter_identifier (raw ID from CSV), hashed_identifier, authorization_status ENUM('authorized'), created_at
   > Scoped to constituency (not election directly) to support multi-constituency elections.
