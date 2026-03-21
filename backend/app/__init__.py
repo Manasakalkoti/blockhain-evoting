@@ -52,7 +52,13 @@ def create_app():
     # Register blueprints
     from app.api.health import health_bp
     from app.api.auth import auth_bp
+    from app.api.elections import elections_bp
+    from app.api.candidates import candidates_bp
+    from app.api.voters import voters_bp
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(elections_bp)
+    app.register_blueprint(candidates_bp)
+    app.register_blueprint(voters_bp)
 
     return app
