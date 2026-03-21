@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from flask import Blueprint, request, jsonify, g
 from app import db
 from app.models.election import Election
@@ -13,10 +16,22 @@ def _candidate_dict(c):
     return {
         "candidate_id": c.candidate_id,
         "candidate_name": c.candidate_name,
+        "candidate_identifier": c.candidate_identifier,
         "party_name": c.party_name,
+        "symbol_url": c.symbol_url,       # used as text symbol (e.g. "🌹", "Hand")
+        "manifesto": c.manifesto,
         "candidate_position": c.candidate_position,
         "constituency_id": c.constituency_id,
+        "constituency_name": c.constituency.constituency_name if c.constituency else None,
         "status": c.status,
+    }
+
+
+def _constituency_dict(c):
+    return {
+        "constituency_id": c.constituency_id,
+        "constituency_name": c.constituency_name,
+        "description": c.description,
     }
 
 
@@ -55,15 +70,25 @@ def _election_detail(election):
             candidates.append(_candidate_dict(cand))
         voter_count += c.election_voters.count()
 
+    location_rules = None
+    if election.location_rules:
+        try:
+            location_rules = json.loads(election.location_rules)
+        except (ValueError, TypeError):
+            location_rules = None
+
     return {
         **_election_summary(election),
         "eligibility_merkle_root": election.eligibility_merkle_root,
+        "location_rule_hash": election.location_rule_hash,
+        "location_rules": location_rules,
         "contract_deployed_at": (
             election.contract_deployed_at.isoformat()
             if election.contract_deployed_at
             else None
         ),
         "candidates": candidates,
+        "constituencies": [_constituency_dict(c) for c in constituencies],
         "voter_count": voter_count,
         "default_constituency_id": default_constituency_id,
     }
@@ -120,10 +145,11 @@ def create_election():
     db.session.add(election)
     db.session.flush()  # get election_id before commit
 
-    # Auto-create one default constituency
+    # Auto-create one default constituency (named "General" for private, title for public)
+    default_name = "General" if visibility_type == "private" else title
     constituency = Constituency(
         election_id=election.election_id,
-        constituency_name="General",
+        constituency_name=default_name,
         description="Default constituency",
     )
     db.session.add(constituency)
@@ -183,6 +209,109 @@ def delete_election(election_id):
     return jsonify({"message": "Election deleted"})
 
 
+# ── Geo-Eligibility Configuration (public elections) ─────────────────────────
+
+@elections_bp.route("/api/elections/<election_id>/geo-eligibility", methods=["PUT"])
+@require_admin
+def save_geo_eligibility(election_id):
+    """Save location-based eligibility rules and return a mock voter estimate."""
+    election = Election.query.get_or_404(election_id)
+    if election.status != "draft":
+        return jsonify({"message": "Only draft elections can be configured"}), 400
+    if election.visibility_type != "public":
+        return jsonify({"message": "Only public elections support geo eligibility"}), 400
+    if election.eligibility_locked:
+        return jsonify({"message": "Eligibility is already locked"}), 400
+
+    data = request.get_json(silent=True) or {}
+    districts = [d.strip() for d in data.get("districts", []) if str(d).strip()]
+    wards = [w.strip() for w in data.get("wards", []) if str(w).strip()]
+    pincodes = [p.strip() for p in data.get("pincodes", []) if str(p).strip()]
+
+    if not districts and not wards and not pincodes:
+        return jsonify({"message": "At least one district, ward, or PIN code is required"}), 400
+
+    rules = {"districts": districts, "wards": wards, "pincodes": pincodes}
+    election.location_rules = json.dumps(rules)
+    db.session.commit()
+
+    # Mock estimate — GEO_MOCK=true means we skip real geocoding
+    import os
+    if os.environ.get("GEO_MOCK", "true").lower() == "true":
+        # Return a plausible estimate based on the number of rules entered
+        rule_count = len(districts) + len(wards) + len(pincodes)
+        estimated_voters = rule_count * 150
+    else:
+        from app.models.user import User
+        # Real implementation: count users whose pincode/city matches the rules
+        estimated_voters = User.query.filter(
+            User.pincode.in_(pincodes) if pincodes else db.false()
+        ).count()
+
+    return jsonify({
+        "location_rules": rules,
+        "estimated_voters": estimated_voters,
+        "message": "Geographic eligibility rules saved successfully",
+    })
+
+
+@elections_bp.route("/api/elections/<election_id>/geo-eligibility/lock", methods=["POST"])
+@require_admin
+def lock_geo_eligibility(election_id):
+    """Lock the geographic eligibility rules — generates a tamper-proof hash."""
+    election = Election.query.get_or_404(election_id)
+    if election.visibility_type != "public":
+        return jsonify({"message": "Only public elections support geo eligibility"}), 400
+    if election.eligibility_locked:
+        return jsonify({"message": "Eligibility is already locked"}), 400
+    if not election.location_rules:
+        return jsonify({"message": "Configure geographic eligibility rules first"}), 400
+
+    rules_hash = "0x" + hashlib.sha256(election.location_rules.encode()).hexdigest()
+    election.location_rule_hash = rules_hash
+    election.eligibility_locked = True
+    db.session.commit()
+
+    return jsonify({
+        "location_rule_hash": rules_hash,
+        "locked": True,
+        "message": "Location-based eligibility locked successfully",
+    })
+
+
+# ── Constituency Management ───────────────────────────────────────────────────
+
+@elections_bp.route("/api/elections/<election_id>/constituencies", methods=["GET"])
+@require_admin
+def list_constituencies(election_id):
+    election = Election.query.get_or_404(election_id)
+    return jsonify({
+        "constituencies": [_constituency_dict(c) for c in election.constituencies.all()]
+    })
+
+
+@elections_bp.route("/api/elections/<election_id>/constituencies", methods=["POST"])
+@require_admin
+def add_constituency(election_id):
+    election = Election.query.get_or_404(election_id)
+    if election.status != "draft":
+        return jsonify({"message": "Only draft elections can be modified"}), 400
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("constituency_name") or "").strip()
+    if not name:
+        return jsonify({"message": "constituency_name is required"}), 400
+
+    c = Constituency(
+        election_id=election_id,
+        constituency_name=name,
+        description=(data.get("description") or "").strip() or None,
+    )
+    db.session.add(c)
+    db.session.commit()
+    return jsonify({"constituency": _constituency_dict(c)}), 201
+
+
 # ── Lock (triggers Merkle + contract deploy pipeline) ─────────────────────────
 
 @elections_bp.route("/api/elections/<election_id>/lock", methods=["POST"])
@@ -206,6 +335,9 @@ def lock_election(election_id):
         total_voters = sum(c.election_voters.count() for c in constituencies)
         if total_voters == 0:
             return jsonify({"message": "Upload voter CSV before locking a private election"}), 400
+
+    if election.visibility_type == "public" and not election.location_rules:
+        return jsonify({"message": "Configure and lock geographic eligibility rules before locking a public election"}), 400
 
     q = extensions.get_queue("default")
     job = q.enqueue(lock_election_pipeline, election_id, job_timeout=300)

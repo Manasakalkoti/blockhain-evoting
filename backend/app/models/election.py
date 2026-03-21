@@ -18,6 +18,7 @@ class Election(db.Model):
     # Blockchain / eligibility fields
     eligibility_merkle_root = db.Column(db.String(66))   # bytes32 hex
     location_rule_hash = db.Column(db.String(66))
+    location_rules = db.Column(db.Text)                  # JSON: districts/wards/pincodes for public elections
     eligibility_locked = db.Column(db.Boolean, default=False, nullable=False)
     candidates_locked = db.Column(db.Boolean, default=False, nullable=False)
     candidate_list_hash = db.Column(db.String(66))
