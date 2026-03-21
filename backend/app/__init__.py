@@ -51,6 +51,8 @@ def create_app():
 
     # Register blueprints
     from app.api.health import health_bp
+    from app.api.auth import auth_bp
     app.register_blueprint(health_bp)
+    app.register_blueprint(auth_bp)
 
     return app

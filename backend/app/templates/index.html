@@ -1,157 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Blockchain E-Voting</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
-    }
-
-    .card {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 16px;
-      padding: 3rem 2.5rem;
-      max-width: 520px;
-      width: 100%;
-      text-align: center;
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
-    }
-
-    .logo {
-      font-size: 3rem;
-      margin-bottom: 1rem;
-    }
-
-    h1 {
-      font-size: 1.75rem;
-      font-weight: 700;
-      color: #f8fafc;
-      margin-bottom: 0.5rem;
-    }
-
-    .subtitle {
-      color: #94a3b8;
-      font-size: 0.95rem;
-      margin-bottom: 2rem;
-    }
-
-    .status-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: #0f172a;
-      border: 1px solid #1e3a5f;
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      margin-bottom: 0.75rem;
-      font-size: 0.875rem;
-    }
-
-    .status-row span:first-child {
-      color: #94a3b8;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.2rem 0.7rem;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      font-weight: 600;
-    }
-
-    .badge.ok { background: #14532d; color: #86efac; }
-    .badge.pending { background: #3b2106; color: #fbbf24; }
-
-    .dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-
-    .dot.ok { background: #22c55e; }
-    .dot.pending { background: #f59e0b; }
-
-    .stack-tags {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      justify-content: center;
-      margin-top: 1.75rem;
-    }
-
-    .tag {
-      background: #1e3a5f;
-      color: #7dd3fc;
-      padding: 0.3rem 0.8rem;
-      border-radius: 6px;
-      font-size: 0.78rem;
-      font-weight: 500;
-    }
-
-    .footer {
-      margin-top: 2rem;
-      color: #475569;
-      font-size: 0.8rem;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="logo">🗳️</div>
-    <h1>Blockchain E-Voting</h1>
-    <p class="subtitle">Secure, transparent, decentralised elections on Ethereum</p>
-
-    <div class="status-row">
-      <span>Flask API</span>
-      <span class="badge ok"><span class="dot ok"></span> Running</span>
-    </div>
-    <div class="status-row">
-      <span>Database</span>
-      <span id="db-status" class="badge pending"><span class="dot pending"></span> Checking…</span>
-    </div>
-    <div class="status-row">
-      <span>Blockchain (Hardhat)</span>
-      <span class="badge pending"><span class="dot pending"></span> Not started</span>
-    </div>
-
-    <div class="stack-tags">
-      <span class="tag">Python Flask</span>
-      <span class="tag">MySQL</span>
-      <span class="tag">Redis + RQ</span>
-      <span class="tag">Ethereum</span>
-      <span class="tag">React</span>
-      <span class="tag">MetaMask</span>
-    </div>
-
-    <p class="footer">TASK-001 complete &mdash; Dev environment ready</p>
-  </div>
-
-  <script>
-    fetch('/api/health')
-      .then(r => r.json())
-      .then(data => {
-        const el = document.getElementById('db-status');
-        if (data.status === 'ok') {
-          el.className = 'badge ok';
-          el.innerHTML = '<span class="dot ok"></span> Connected';
-        }
-      })
-      .catch(() => {});
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blockchain E-Voting</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import RefreshRuntime from '/@react-refresh'
+      RefreshRuntime.injectIntoGlobalHook(window)
+      window.$RefreshReg$ = () => {}
+      window.$RefreshSig$ = () => identity
+      window.__vite_plugin_react_preamble_installed__ = true
+    </script>
+    <script type="module" src="/@vite/client"></script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
