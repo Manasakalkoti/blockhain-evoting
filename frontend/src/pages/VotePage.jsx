@@ -78,7 +78,7 @@ export default function VotePage() {
       const hash = await castVote(
         id,
         election.contract_address,
-        selectedCandidate.position,
+        selectedCandidate.candidate_position,
         isPublic,
         setStatusMsg
       )
