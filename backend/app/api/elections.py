@@ -317,7 +317,7 @@ def add_constituency(election_id):
 @elections_bp.route("/api/elections/<election_id>/lock", methods=["POST"])
 @require_admin
 def lock_election(election_id):
-    from app import extensions
+    import os
     from app.jobs.merkle_jobs import lock_election_pipeline
 
     election = Election.query.get_or_404(election_id)
@@ -339,11 +339,22 @@ def lock_election(election_id):
     if election.visibility_type == "public" and not election.location_rules:
         return jsonify({"message": "Configure and lock geographic eligibility rules before locking a public election"}), 400
 
-    q = extensions.get_queue("default")
-    job = q.enqueue(lock_election_pipeline, election_id, job_timeout=300)
-    extensions.redis_client.set(f"job:lock:{election_id}", job.id, ex=3600)
+    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
 
-    return jsonify({"job_id": job.id, "status": "queued"})
+    if blockchain_enabled:
+        # Real blockchain mode — offload to RQ worker (requires running worker)
+        from app import extensions
+        q = extensions.get_queue("default")
+        job = q.enqueue(lock_election_pipeline, election_id, job_timeout=300)
+        extensions.redis_client.set(f"job:lock:{election_id}", job.id, ex=3600)
+        return jsonify({"job_id": job.id, "status": "queued"})
+    else:
+        # Mock mode — run synchronously (no worker needed, avoids macOS fork crash)
+        try:
+            result = lock_election_pipeline(election_id)
+            return jsonify({"status": "finished", "result": result})
+        except Exception as exc:
+            return jsonify({"status": "failed", "error": str(exc)}), 500
 
 
 # ── End Election (calls endElection on contract) ──────────────────────────────
@@ -351,18 +362,27 @@ def lock_election(election_id):
 @elections_bp.route("/api/elections/<election_id>/end", methods=["POST"])
 @require_admin
 def end_election_route(election_id):
-    from app import extensions
+    import os
     from app.jobs.merkle_jobs import end_election_job
 
     election = Election.query.get_or_404(election_id)
     if election.status not in ("active", "scheduled"):
         return jsonify({"message": "Election must be active or scheduled to end"}), 400
 
-    q = extensions.get_queue("default")
-    job = q.enqueue(end_election_job, election_id, job_timeout=120)
-    extensions.redis_client.set(f"job:end:{election_id}", job.id, ex=3600)
+    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
 
-    return jsonify({"job_id": job.id, "status": "queued"})
+    if blockchain_enabled:
+        from app import extensions
+        q = extensions.get_queue("default")
+        job = q.enqueue(end_election_job, election_id, job_timeout=120)
+        extensions.redis_client.set(f"job:end:{election_id}", job.id, ex=3600)
+        return jsonify({"job_id": job.id, "status": "queued"})
+    else:
+        try:
+            result = end_election_job(election_id)
+            return jsonify({"status": "finished", "result": result})
+        except Exception as exc:
+            return jsonify({"status": "failed", "error": str(exc)}), 500
 
 
 # ── Job status poll ───────────────────────────────────────────────────────────
@@ -381,7 +401,9 @@ def job_status(election_id):
     job_id = raw.decode() if isinstance(raw, bytes) else raw
     try:
         job = Job.fetch(job_id, connection=extensions.redis_client)
-        status = str(job.get_status())
+        # RQ 2.x returns a JobStatus enum; use .value to get the plain string
+        raw = job.get_status()
+        status = raw.value if hasattr(raw, "value") else str(raw)
         resp = {"job_id": job_id, "status": status}
         if status == "finished":
             resp["result"] = job.result
@@ -425,4 +447,60 @@ def list_voters(election_id):
         "voters": voters,
         "total": len(voters),
         "verified_count": len(verified_ids),
+    })
+
+
+# ── Audit (on-chain vs DB comparison) ─────────────────────────────────────────
+
+@elections_bp.route("/api/elections/<election_id>/audit", methods=["GET"])
+@require_admin
+def audit_election(election_id):
+    """
+    Dual-source audit: compare on-chain vote tallies vs DB vote_transactions.
+    Returns both counts for the Result Committee dashboard.
+    """
+    import os
+    from app.models.vote_transaction import VoteTransaction
+
+    election = Election.query.get_or_404(election_id)
+
+    # DB tally
+    db_transactions = VoteTransaction.query.filter_by(election_id=election_id).all()
+    db_tally = {}
+    for tx in db_transactions:
+        cid = str(tx.candidate_id)
+        db_tally[cid] = db_tally.get(cid, 0) + 1
+
+    # On-chain tally (if available)
+    on_chain_tally = None
+    match = None
+    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
+    if blockchain_enabled and election.contract_address:
+        try:
+            import json as _json
+            from web3 import Web3
+            rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
+            artifact_path = os.path.join(
+                os.path.dirname(__file__),
+                "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+            )
+            with open(artifact_path) as f:
+                artifact = _json.load(f)
+            w3 = Web3(Web3.HTTPProvider(rpc_url))
+            contract = w3.eth.contract(address=election.contract_address, abi=artifact["abi"])
+            ids, counts = contract.functions.getResults().call()
+            on_chain_tally = {str(int(ids[i])): int(counts[i]) for i in range(len(ids))}
+            match = (on_chain_tally == db_tally)
+        except Exception as exc:
+            on_chain_tally = {"error": str(exc)}
+            match = None
+
+    return jsonify({
+        "election_id": election_id,
+        "contract_address": election.contract_address,
+        "db_tally": db_tally,
+        "on_chain_tally": on_chain_tally,
+        "match": match,
+        "total_db_votes": len(db_transactions),
+        "blockchain_enabled": blockchain_enabled,
     })

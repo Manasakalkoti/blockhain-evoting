@@ -23,6 +23,9 @@ class Election(db.Model):
     candidates_locked = db.Column(db.Boolean, default=False, nullable=False)
     candidate_list_hash = db.Column(db.String(66))
 
+    # Merkle tree JSON — full tree stored for on-demand proof generation
+    merkle_tree_json = db.Column(db.Text)
+
     # Contract info (filled after deployment)
     contract_address = db.Column(db.String(42))
     contract_deployed_at = db.Column(db.DateTime)

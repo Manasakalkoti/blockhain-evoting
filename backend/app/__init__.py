@@ -56,11 +56,13 @@ def create_app():
     from app.api.candidates import candidates_bp
     from app.api.voters import voters_bp
     from app.api.voter_elections import voter_elections_bp
+    from app.api.votes import votes_bp
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(elections_bp)
     app.register_blueprint(candidates_bp)
     app.register_blueprint(voters_bp)
     app.register_blueprint(voter_elections_bp)
+    app.register_blueprint(votes_bp)
 
     return app

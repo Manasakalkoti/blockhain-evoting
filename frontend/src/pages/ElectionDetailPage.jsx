@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { useAuth } from '../context/AuthContext'
 import api from '../api/client'
+import { connectWallet, getConnectedAddress } from '../services/web3'
 
 const STATUS_STYLES = {
   draft: 'bg-gray-100 text-gray-600',
@@ -173,6 +174,68 @@ function VerifiedBanner({ electionId, isActive, navigate }) {
   )
 }
 
+// ── Wallet link section ───────────────────────────────────────────────────────
+
+function WalletLinkSection({ initialWallet, onLinked }) {
+  const [wallet, setWallet] = useState(initialWallet || '')
+  const [linking, setLinking] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+
+  // Detect if a wallet is already linked (passed in from profile or updated here)
+  const linked = wallet && wallet.startsWith('0x')
+
+  async function handleLink() {
+    setLinking(true)
+    setError('')
+    setSuccess(false)
+    try {
+      const { address } = await connectWallet()
+      await api.put('/api/auth/wallet', { wallet_address: address })
+      setWallet(address)
+      setSuccess(true)
+      if (onLinked) onLinked(address)
+    } catch (err) {
+      if (err.message?.includes('MetaMask')) {
+        setError(err.message)
+      } else {
+        setError(err.response?.data?.message || 'Failed to link wallet')
+      }
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  if (linked) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+        <span className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
+        Wallet linked:{' '}
+        <span className="font-mono">{wallet.slice(0, 8)}…{wallet.slice(-6)}</span>
+        {success && <span className="ml-auto text-green-600 font-medium">Saved!</span>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+      <p className="text-sm text-amber-800 font-medium mb-1">MetaMask Wallet Required</p>
+      <p className="text-xs text-amber-700 mb-3">
+        You must link your MetaMask wallet before voting. For private elections, your wallet address
+        is added to the eligibility list when the admin locks it — link yours early.
+      </p>
+      <button
+        onClick={handleLink}
+        disabled={linking}
+        className="bg-amber-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+      >
+        {linking ? 'Connecting…' : 'Link MetaMask Wallet'}
+      </button>
+      {error && <p className="text-red-600 text-xs mt-2">{error}</p>}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ElectionDetailPage() {
@@ -183,6 +246,17 @@ export default function ElectionDetailPage() {
   const [election, setElection] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [linkedWallet, setLinkedWallet] = useState(user?.wallet_address || '')
+
+  // Sync wallet from auth context on mount (profile may have it already)
+  useEffect(() => {
+    if (user?.wallet_address) {
+      setLinkedWallet(user.wallet_address)
+    } else {
+      // Non-intrusive check: see if MetaMask is already connected
+      getConnectedAddress().then((addr) => { if (addr) setLinkedWallet(addr) })
+    }
+  }, [user])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -250,6 +324,16 @@ export default function ElectionDetailPage() {
               <p className="text-sm text-red-600 font-medium">
                 ✗ You are not eligible for this election
               </p>
+            </div>
+          )}
+
+          {/* Wallet link — shown for active/scheduled elections when voter isn't yet verified */}
+          {(isActive || isScheduled) && !isNotEligible && (
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <WalletLinkSection
+                initialWallet={linkedWallet}
+                onLinked={(addr) => setLinkedWallet(addr)}
+              />
             </div>
           )}
 

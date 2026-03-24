@@ -1,48 +1,136 @@
 """
 RQ jobs for election lifecycle:
 
-  lock_election_pipeline — generate Merkle root + mock-deploy contract + transition status
+  lock_election_pipeline — generate Merkle root from voter wallet addresses
+                           + deploy contract (mock or real) + transition status
   end_election_job       — call endElection() on contract + mark completed
+
+Merkle design (matches EVoting.sol _verifyMerkle):
+  - Leaf  = keccak256(abi.encodePacked(wallet_address))
+            = keccak256(20-byte address)   [matches Solidity]
+  - Tree  = sorted-pair combination, OpenZeppelin compatible
+  - Root  stored on-chain in contract constructor
+  - Proofs generated on-demand from stored merkle_tree_json
 """
 
+import json
 
-# ── Merkle tree ───────────────────────────────────────────────────────────────
 
-def _build_merkle_root(leaves: list) -> str:
+# ── Merkle tree utilities ──────────────────────────────────────────────────────
+
+def _norm(h: str) -> bytes:
+    """Convert hex string (with or without 0x) to bytes."""
+    h = h[2:] if h.startswith("0x") else h
+    return bytes.fromhex(h.zfill(64))
+
+
+def _hash_pair(a: bytes, b: bytes) -> bytes:
+    """Sorted-pair keccak256 — matches Solidity sorted-pair Merkle."""
+    from web3 import Web3
+    if a <= b:
+        return bytes(Web3.keccak(a + b))
+    return bytes(Web3.keccak(b + a))
+
+
+def _wallet_leaf(wallet_address: str) -> str:
     """
-    Build a sorted-pair Merkle root from a list of hex leaf hashes.
-    Compatible with OpenZeppelin MerkleProof and the EVoting.sol contract.
+    Compute Merkle leaf for a wallet address.
+    Matches Solidity: keccak256(abi.encodePacked(voter))
+    where voter is an address (20 bytes, NOT padded to 32).
     """
     from web3 import Web3
+    addr_bytes = bytes.fromhex(wallet_address.lower().replace("0x", ""))  # 20 bytes
+    return "0x" + Web3.keccak(addr_bytes).hex()
 
-    if not leaves:
-        return "0x" + "0" * 64
 
-    def norm(h: str) -> bytes:
-        h = h[2:] if h.startswith("0x") else h
-        return bytes.fromhex(h.zfill(64))
+def build_merkle_tree(wallet_addresses: list) -> tuple:
+    """
+    Build a sorted-pair Merkle tree from a list of wallet addresses.
 
-    def hash_pair(a: bytes, b: bytes) -> bytes:
-        if a <= b:
-            return bytes(Web3.keccak(a + b))
-        return bytes(Web3.keccak(b + a))
+    Returns (root_hex, tree_data_dict) where tree_data_dict can be stored
+    as JSON and later used to generate proofs via get_proof().
 
-    layer = [norm(leaf) for leaf in leaves]
+    Tree data format:
+      {
+        "addresses": [sorted lowercase wallet addresses],
+        "leaves":    [keccak256(addr) for each sorted address],
+        "padded_layers": [
+          [padded leaf layer],       # index 0
+          [parent layer],            # index 1
+          ...
+          [root_layer]               # last index
+        ],
+        "root": "0x..."
+      }
+    """
+    if not wallet_addresses:
+        zero = "0x" + "0" * 64
+        return zero, {"addresses": [], "leaves": [], "padded_layers": [], "root": zero}
 
-    while len(layer) > 1:
-        if len(layer) % 2 == 1:
-            layer.append(layer[-1])  # duplicate last node if odd count
-        layer = [hash_pair(layer[i], layer[i + 1]) for i in range(0, len(layer), 2)]
+    # Sort and deduplicate
+    addrs = sorted(set(a.lower() for a in wallet_addresses))
+    leaves = [_wallet_leaf(a) for a in addrs]
 
-    return "0x" + layer[0].hex()
+    # Build padded layers (each layer is padded to even length by duplicating last)
+    padded_layers = []
+    current = leaves[:]
+
+    while len(current) > 1:
+        padded = current[:]
+        if len(padded) % 2 == 1:
+            padded.append(padded[-1])  # duplicate last for odd-length layers
+        padded_layers.append(padded)
+
+        next_layer = []
+        for i in range(0, len(padded), 2):
+            h = _hash_pair(_norm(padded[i]), _norm(padded[i + 1]))
+            next_layer.append("0x" + h.hex())
+        current = next_layer
+
+    # current is now [root]
+    root = current[0]
+    padded_layers.append(current)  # root layer
+
+    tree_data = {
+        "addresses": addrs,
+        "leaves": leaves,
+        "padded_layers": padded_layers,
+        "root": root,
+    }
+    return root, tree_data
+
+
+def get_proof(tree_data: dict, wallet_address: str) -> list:
+    """
+    Generate a Merkle proof for a wallet address from stored tree data.
+    Returns a list of bytes32 hex strings (the sibling path from leaf to root).
+    Returns None if the address is not in the tree.
+    """
+    addr = wallet_address.lower()
+    addresses = tree_data.get("addresses", [])
+
+    if addr not in addresses:
+        return None
+
+    idx = addresses.index(addr)
+    padded_layers = tree_data.get("padded_layers", [])
+    proof = []
+
+    # Walk up the tree (skip the root layer at the end)
+    for layer in padded_layers[:-1]:
+        sibling_idx = idx ^ 1  # flip last bit: 0↔1, 2↔3, etc.
+        proof.append(layer[sibling_idx])
+        idx = idx >> 1  # parent index
+
+    return proof
 
 
 # ── Mock contract deploy ───────────────────────────────────────────────────────
 
 def _mock_deploy_contract(election_id: str, merkle_root: str, candidate_count: int) -> str:
     """
-    Deterministic fake Ethereum address derived from election params.
-    Replace with a real web3.py + Hardhat/Anvil deployment when ready.
+    Deterministic fake Ethereum address for local dev without a running Hardhat node.
+    Replace with _real_deploy_contract() when Hardhat node / Sepolia is available.
     """
     import hashlib
     seed = f"{election_id}:{merkle_root}:{candidate_count}"
@@ -50,19 +138,57 @@ def _mock_deploy_contract(election_id: str, merkle_root: str, candidate_count: i
     return "0x" + digest[:40]
 
 
-# ── Lock pipeline ─────────────────────────────────────────────────────────────
+def _real_deploy_contract(
+    election_id: str,
+    candidate_ids: list,
+    start_time: int,
+    end_time: int,
+    merkle_root: str,
+    rpc_url: str,
+    private_key: str,
+    abi: list,
+    bytecode: str,
+) -> str:
+    """
+    Real contract deployment via web3.py.
+    Called when BLOCKCHAIN_ENABLED=true in backend .env.
+    """
+    from web3 import Web3
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    account = w3.eth.account.from_key(private_key)
+
+    contract = w3.eth.contract(abi=abi, bytecode=bytecode)
+    tx = contract.constructor(
+        candidate_ids,
+        start_time,
+        end_time,
+        bytes.fromhex(merkle_root.replace("0x", "").zfill(64)),
+    ).build_transaction({
+        "from": account.address,
+        "nonce": w3.eth.get_transaction_count(account.address),
+        "gas": 3_000_000,
+    })
+    signed = account.sign_transaction(tx)
+    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    return receipt.contractAddress
+
+
+# ── Lock pipeline ──────────────────────────────────────────────────────────────
 
 def lock_election_pipeline(election_id: str) -> dict:
     """
-    Full lock pipeline (runs in RQ worker):
-      1. Collect all voter hashes → build Merkle root
-      2. Mock-deploy EVoting contract
-      3. Update election: lock flags, merkle root, contract address, status
+    Full lock pipeline (runs as RQ background job):
+      1. For private elections: collect voter wallet addresses, build Merkle tree
+      2. For public elections:  zero Merkle root (geo check was off-chain)
+      3. Deploy EVoting contract (mock or real depending on BLOCKCHAIN_ENABLED env)
+      4. Persist: merkle_root, merkle_tree_json, contract_address, lock flags, status
     """
+    import os
     from datetime import datetime
     from app import create_app, db
     from app.models.election import Election
-    from app.models.candidate import Candidate
+    from app.models.user import User
 
     app = create_app()
     with app.app_context():
@@ -71,27 +197,81 @@ def lock_election_pipeline(election_id: str) -> dict:
             raise ValueError(f"Election {election_id} not found")
 
         constituencies = election.constituencies.all()
+        candidate_ids_int = []
+        wallet_addresses = []
 
-        # Collect leaves and candidate count
-        all_leaves = []
-        candidate_count = 0
         for c in constituencies:
-            for ev in c.election_voters.all():
-                all_leaves.append(ev.hashed_identifier)
-            candidate_count += c.candidates.filter_by(status="active").count()
+            # Collect candidate IDs (integer position used on-chain)
+            for cand in c.candidates.filter_by(status="active").all():
+                candidate_ids_int.append(cand.candidate_position or 0)
 
-        # Build Merkle root (public elections get zero root)
-        if election.visibility_type == "private" and all_leaves:
-            merkle_root = _build_merkle_root(all_leaves)
+            # Collect voter wallet addresses for private elections
+            if election.visibility_type == "private":
+                for ev in c.election_voters.filter_by(authorization_status="authorized").all():
+                    # Join voter_identifier to user.student_id / employee_id → get wallet
+                    user = User.query.filter(
+                        (User.student_id == ev.voter_identifier) |
+                        (User.employee_id == ev.voter_identifier)
+                    ).first()
+                    if user and user.wallet_address:
+                        wallet_addresses.append(user.wallet_address)
+
+        # Build Merkle tree
+        if election.visibility_type == "private" and wallet_addresses:
+            merkle_root, tree_data = build_merkle_tree(wallet_addresses)
         else:
+            # Public election — zero root signals "no Merkle check" in contract
             merkle_root = "0x" + "0" * 64
+            tree_data = {"addresses": [], "leaves": [], "padded_layers": [], "root": merkle_root}
 
-        # Mock deploy
-        contract_address = _mock_deploy_contract(election_id, merkle_root, candidate_count)
+        # Use unique 1-based candidate IDs if positions aren't set
+        if not candidate_ids_int:
+            candidate_ids_int = list(range(1, sum(
+                c.candidates.filter_by(status="active").count() for c in constituencies
+            ) + 1))
+
+        # Remove duplicate candidate IDs
+        seen = set()
+        unique_candidate_ids = []
+        for cid in candidate_ids_int:
+            if cid not in seen and cid > 0:
+                seen.add(cid)
+                unique_candidate_ids.append(cid)
+
+        if not unique_candidate_ids:
+            raise ValueError("No active candidates found for deployment")
+
+        # Deploy contract
+        blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
+        if blockchain_enabled:
+            rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
+            private_key = os.environ.get("PLATFORM_PRIVATE_KEY", "")
+            # Load ABI + bytecode from compiled artifacts
+            artifact_path = os.path.join(
+                os.path.dirname(__file__), "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+            )
+            with open(artifact_path) as f:
+                artifact = json.load(f)
+            contract_address = _real_deploy_contract(
+                election_id=election_id,
+                candidate_ids=unique_candidate_ids,
+                start_time=int(election.start_time.timestamp()),
+                end_time=int(election.end_time.timestamp()),
+                merkle_root=merkle_root,
+                rpc_url=rpc_url,
+                private_key=private_key,
+                abi=artifact["abi"],
+                bytecode=artifact["bytecode"],
+            )
+        else:
+            contract_address = _mock_deploy_contract(
+                election_id, merkle_root, len(unique_candidate_ids)
+            )
 
         # Persist
         now = datetime.utcnow()
         election.eligibility_merkle_root = merkle_root
+        election.merkle_tree_json = json.dumps(tree_data)
         election.eligibility_locked = True
         election.candidates_locked = True
         election.contract_address = contract_address
@@ -104,19 +284,20 @@ def lock_election_pipeline(election_id: str) -> dict:
             "merkle_root": merkle_root,
             "contract_address": contract_address,
             "status": election.status,
-            "voter_count": len(all_leaves),
-            "candidate_count": candidate_count,
+            "voter_count": len(wallet_addresses),
+            "candidate_count": len(unique_candidate_ids),
         }
 
 
-# ── End election ──────────────────────────────────────────────────────────────
+# ── End election ───────────────────────────────────────────────────────────────
 
 def end_election_job(election_id: str) -> dict:
     """
-    End election (runs in RQ worker):
-      1. Call endElection() on deployed contract  (mock for now)
+    End election (runs as RQ background job):
+      1. Call endElection() on deployed contract (mock or real)
       2. Mark election completed + publish results
     """
+    import os
     from datetime import datetime
     from app import create_app, db
     from app.models.election import Election
@@ -127,12 +308,28 @@ def end_election_job(election_id: str) -> dict:
         if not election:
             raise ValueError(f"Election {election_id} not found")
 
-        # TODO: real call →
-        #   from web3 import Web3
-        #   w3 = Web3(Web3.HTTPProvider(os.getenv("RPC_URL")))
-        #   contract = w3.eth.contract(address=election.contract_address, abi=EVOTING_ABI)
-        #   tx = contract.functions.endElection().transact({"from": admin_wallet})
-        #   w3.eth.wait_for_transaction_receipt(tx)
+        blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
+        if blockchain_enabled and election.contract_address:
+            rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
+            private_key = os.environ.get("PLATFORM_PRIVATE_KEY", "")
+            artifact_path = os.path.join(
+                os.path.dirname(__file__), "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+            )
+            with open(artifact_path) as f:
+                artifact = json.load(f)
+
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(rpc_url))
+            account = w3.eth.account.from_key(private_key)
+            contract = w3.eth.contract(address=election.contract_address, abi=artifact["abi"])
+            tx = contract.functions.endElection().build_transaction({
+                "from": account.address,
+                "nonce": w3.eth.get_transaction_count(account.address),
+                "gas": 100_000,
+            })
+            signed = account.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            w3.eth.wait_for_transaction_receipt(tx_hash)
 
         ended_at = datetime.utcnow()
         election.status = "completed"

@@ -1,10 +1,12 @@
 import json
+import os
 from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from app import db
 from app.models.election import Election
 from app.models.candidate import Candidate
 from app.models.voter_verification import VoterVerification
+from app.models.vote_transaction import VoteTransaction
 from app.api.middleware import require_jwt
 
 voter_elections_bp = Blueprint("voter_elections", __name__)
@@ -249,3 +251,167 @@ def verify_eligibility(election_id):
                 "state": user.state,
             }
         }), 400
+
+
+# ── Merkle Proof ───────────────────────────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/elections/<election_id>/merkle-proof", methods=["GET"])
+@require_jwt
+def get_merkle_proof(election_id):
+    """
+    Return a Merkle proof for the authenticated voter's wallet address.
+    Called by the frontend just before submitting the vote transaction.
+
+    The voter must:
+      1. Have been pre-verified for this election.
+      2. Have a wallet_address linked to their account.
+
+    Query param: voter=<wallet_address>  (must match user's registered wallet)
+    """
+    from app.models.user import User
+    from app.jobs.merkle_jobs import get_proof
+
+    election = Election.query.get_or_404(election_id)
+
+    if election.visibility_type == "public":
+        # Public elections use zero Merkle root — no proof needed
+        return jsonify({"merkle_proof": [], "is_public": True})
+
+    if not election.eligibility_locked or not election.merkle_tree_json:
+        return jsonify({"message": "Eligibility has not been locked yet"}), 400
+
+    # Voter must be pre-verified
+    verification = VoterVerification.query.filter_by(
+        election_id=election_id,
+        user_id=g.user_id,
+        verified=True,
+    ).first()
+    if not verification:
+        return jsonify({"message": "You are not verified for this election"}), 403
+
+    user = User.query.get_or_404(g.user_id)
+    if not user.wallet_address:
+        return jsonify({"message": "Link a wallet address to your account before voting"}), 400
+
+    # Optional: allow voter to specify wallet (must match registered)
+    requested_wallet = (request.args.get("voter") or "").strip().lower()
+    if requested_wallet and requested_wallet != user.wallet_address.lower():
+        return jsonify({"message": "Wallet address does not match your registered address"}), 403
+
+    wallet = user.wallet_address.lower()
+
+    try:
+        tree_data = json.loads(election.merkle_tree_json)
+    except (ValueError, TypeError):
+        return jsonify({"message": "Merkle tree data is corrupted"}), 500
+
+    proof = get_proof(tree_data, wallet)
+    if proof is None:
+        return jsonify({
+            "message": "Your wallet address is not in the eligibility list. "
+                       "The admin may need to re-lock the election after you link your wallet."
+        }), 403
+
+    return jsonify({
+        "merkle_proof": proof,
+        "wallet_address": wallet,
+        "election_id": election_id,
+    })
+
+
+# ── Election Results ────────────────────────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/elections/<election_id>/results", methods=["GET"])
+@require_jwt
+def get_election_results(election_id):
+    """
+    Return election results for display on the Results page.
+
+    For completed elections, reads vote tallies from:
+      1. On-chain via web3.py getResults() call (if BLOCKCHAIN_ENABLED=true)
+      2. DB vote_transactions table (always available, used as fallback)
+
+    Response:
+      title, contract_address, candidates (with vote counts), transactions (audit log)
+    """
+    election = Election.query.get_or_404(election_id)
+
+    if not election.results_published and election.status != "completed":
+        return jsonify({"message": "Results are not yet available"}), 400
+
+    # Build candidate map from DB
+    constituencies = election.constituencies.all()
+    candidates_db = []
+    candidate_map = {}  # candidate_position → candidate info
+    for c in constituencies:
+        for cand in c.candidates.filter_by(status="active").order_by(Candidate.candidate_position).all():
+            info = {
+                "candidate_id": cand.candidate_id,
+                "candidate_name": cand.candidate_name,
+                "party_name": cand.party_name,
+                "position": cand.candidate_position,
+                "votes": 0,
+            }
+            candidates_db.append(info)
+            candidate_map[str(cand.candidate_position)] = info
+
+    # Fetch vote transactions for audit log
+    transactions = VoteTransaction.query.filter_by(election_id=election_id).all()
+
+    # Count votes from DB transactions (fallback always works)
+    for tx in transactions:
+        cid = str(tx.candidate_id)
+        if cid in candidate_map:
+            candidate_map[cid]["votes"] += 1
+
+    # Try to fetch on-chain results (more authoritative)
+    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
+    on_chain_counts = None
+    if blockchain_enabled and election.contract_address:
+        try:
+            on_chain_counts = _fetch_on_chain_results(election.contract_address)
+        except Exception:
+            on_chain_counts = None  # fall back to DB counts silently
+
+    # If on-chain data available, use it to override DB counts
+    if on_chain_counts:
+        for position_str, count in on_chain_counts.items():
+            if position_str in candidate_map:
+                candidate_map[position_str]["votes"] = count
+
+    return jsonify({
+        "election_id": election.election_id,
+        "title": election.title,
+        "status": election.status,
+        "contract_address": election.contract_address,
+        "candidates": candidates_db,
+        "transactions": [
+            {
+                "blockchain_tx_hash": tx.blockchain_tx_hash,
+                "wallet_address": tx.wallet_address,
+                "timestamp": tx.timestamp.isoformat(),
+            }
+            for tx in transactions
+        ],
+        "total_votes": len(transactions),
+    })
+
+
+def _fetch_on_chain_results(contract_address: str) -> dict:
+    """
+    Call getResults() on the deployed EVoting contract.
+    Returns {candidate_position_str: vote_count} or raises on failure.
+    """
+    import json as _json
+    from web3 import Web3
+    rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
+    artifact_path = os.path.join(
+        os.path.dirname(__file__),
+        "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+    )
+    with open(artifact_path) as f:
+        artifact = _json.load(f)
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    contract = w3.eth.contract(address=contract_address, abi=artifact["abi"])
+    ids, counts = contract.functions.getResults().call()
+    return {str(int(ids[i])): int(counts[i]) for i in range(len(ids))}

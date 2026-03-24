@@ -1,0 +1,21 @@
+{
+  "name": "blockchain-evoting-contracts",
+  "version": "1.0.0",
+  "description": "Hardhat smart contract setup for EVoting Phase 1",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.js --network hardhat",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0"
+  },
+  "dependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.7",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.0"
+  }
+}

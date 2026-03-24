@@ -623,9 +623,19 @@ export default function AdminElectionDetailPage() {
     if (!confirm('Lock this election and deploy the contract? This cannot be undone.')) return
     try {
       const { data } = await api.post(`/api/elections/${id}/lock`)
-      startLockPoll(data.job_id)
+      if (data.job_id) {
+        // Blockchain mode — worker handles it, poll for status
+        startLockPoll(data.job_id)
+      } else {
+        // Mock mode — result is immediate
+        if (data.status === 'failed') {
+          alert(data.error || 'Lock failed')
+        } else {
+          reload()
+        }
+      }
     } catch (err) {
-      alert(err.response?.data?.message || 'Lock failed')
+      alert(err.response?.data?.message || err.response?.data?.error || 'Lock failed')
     }
   }
 
@@ -633,9 +643,17 @@ export default function AdminElectionDetailPage() {
     if (!confirm('End this election? Voters will no longer be able to cast votes.')) return
     try {
       const { data } = await api.post(`/api/elections/${id}/end`)
-      startEndPoll(data.job_id)
+      if (data.job_id) {
+        startEndPoll(data.job_id)
+      } else {
+        if (data.status === 'failed') {
+          alert(data.error || 'End election failed')
+        } else {
+          reload()
+        }
+      }
     } catch (err) {
-      alert(err.response?.data?.message || 'End election failed')
+      alert(err.response?.data?.message || err.response?.data?.error || 'End election failed')
     }
   }
 
