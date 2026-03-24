@@ -105,18 +105,34 @@ function PrivateVerification({ electionId, onVerified }) {
 // ── Public election verification ──────────────────────────────────────────────
 
 function PublicVerification({ electionId, election, user, onVerified }) {
+  const [form, setForm] = useState({
+    address_line: user?.address_line || '',
+    city: user?.city || '',
+    state: user?.state || '',
+    pincode: user?.pincode || '',
+  })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const address = [user?.address_line, user?.city, user?.state, user?.pincode]
-    .filter(Boolean)
-    .join(', ')
+  function handleChange(e) {
+    setForm((f) => ({ ...f, [e.target.name]: e.target.value }))
+  }
 
-  async function verify() {
+  async function submit(e) {
+    e.preventDefault()
+    if (!form.city.trim() && !form.pincode.trim()) {
+      setError('Please enter at least your city or pincode')
+      return
+    }
     setLoading(true)
     setError('')
     try {
-      await api.post(`/api/voter/elections/${electionId}/verify`)
+      await api.post(`/api/voter/elections/${electionId}/verify`, {
+        city: form.city.trim(),
+        state: form.state.trim(),
+        pincode: form.pincode.trim(),
+        address_line: form.address_line.trim(),
+      })
       onVerified()
     } catch (err) {
       setError(err.response?.data?.message || 'Not eligible for this election')
@@ -131,25 +147,54 @@ function PublicVerification({ electionId, election, user, onVerified }) {
     : ''
 
   return (
-    <div className="mt-5 pt-5 border-t border-gray-100">
-      <p className="text-sm font-medium text-gray-700 mb-1">Your Registered Address</p>
-      <p className="text-sm text-gray-500 mb-3">
-        {address || 'No address on file. Update your profile to verify eligibility.'}
+    <form onSubmit={submit} className="mt-5 pt-5 border-t border-gray-100">
+      <p className="text-sm font-medium text-gray-700 mb-3">
+        Enter your address to verify geographic eligibility
       </p>
       {eligible_zones && (
         <p className="text-xs text-gray-400 mb-3">
           Eligible zones: {eligible_zones}
         </p>
       )}
+      <div className="grid grid-cols-2 gap-2 mb-2">
+        <input
+          name="address_line"
+          value={form.address_line}
+          onChange={handleChange}
+          placeholder="Address line (optional)"
+          className="col-span-2 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        />
+        <input
+          name="city"
+          value={form.city}
+          onChange={handleChange}
+          placeholder="City / District *"
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        />
+        <input
+          name="state"
+          value={form.state}
+          onChange={handleChange}
+          placeholder="State"
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        />
+        <input
+          name="pincode"
+          value={form.pincode}
+          onChange={handleChange}
+          placeholder="Pincode *"
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        />
+      </div>
       <button
-        onClick={verify}
-        disabled={loading || !address}
+        type="submit"
+        disabled={loading || (!form.city.trim() && !form.pincode.trim())}
         className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
       >
         {loading ? 'Checking…' : 'Verify Eligibility'}
       </button>
       {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-    </div>
+    </form>
   )
 }
 

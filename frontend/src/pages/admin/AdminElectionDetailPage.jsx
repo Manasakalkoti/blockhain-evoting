@@ -753,11 +753,21 @@ export default function AdminElectionDetailPage() {
                 </dd>
               </div>
             )}
-            {election.contract_address && (
+            {election.contract_address ? (
               <div className="col-span-2">
                 <dt className="text-gray-400">Contract address</dt>
                 <dd className="text-gray-700 font-mono text-xs break-all mt-0.5">
                   {election.contract_address}
+                </dd>
+              </div>
+            ) : (election.status !== 'draft') && (
+              <div className="col-span-2">
+                <dt className="text-red-500 font-medium">Contract not deployed</dt>
+                <dd className="text-red-600 text-xs mt-0.5">
+                  Voters cannot cast votes until the contract is deployed.
+                  Ensure <code className="bg-red-50 px-1 rounded">BLOCKCHAIN_ENABLED=true</code> and
+                  a Hardhat/Sepolia node is running, then click <strong>Lock Election</strong> again
+                  (reset to draft first).
                 </dd>
               </div>
             )}

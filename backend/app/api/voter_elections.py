@@ -119,6 +119,7 @@ def voter_get_election(election_id):
             "results_published": election.results_published,
             "eligibility_locked": election.eligibility_locked,
             "location_rules": location_rules,
+            "contract_address": election.contract_address,
             "candidates": candidates,
             "verification_status": verif,
         }
@@ -212,12 +213,20 @@ def verify_eligibility(election_id):
         except (ValueError, TypeError):
             return jsonify({"message": "Invalid eligibility rules"}), 500
 
+        # Accept address credentials from the request body
+        data = request.get_json(silent=True) or {}
+        submitted_city = (data.get("city") or "").strip()
+        submitted_pincode = (data.get("pincode") or "").strip()
+
+        if not submitted_city and not submitted_pincode:
+            return jsonify({"message": "Please provide at least your city or pincode for verification"}), 400
+
         districts = [d.lower() for d in rules.get("districts", [])]
         wards = [w.lower() for w in rules.get("wards", [])]
         pincodes = rules.get("pincodes", [])
 
-        voter_pincode = (user.pincode or "").strip()
-        voter_city = (user.city or "").lower().strip()
+        voter_pincode = submitted_pincode
+        voter_city = submitted_city.lower()
 
         # GEO_MOCK: simple text match against pincode and city/district
         matched = (
@@ -244,11 +253,10 @@ def verify_eligibility(election_id):
             })
         return jsonify({
             "verified": False,
-            "message": "Your registered address is not within the eligible geographic area for this election",
-            "your_address": {
-                "city": user.city,
-                "pincode": user.pincode,
-                "state": user.state,
+            "message": "Your address is not within the eligible geographic area for this election",
+            "submitted_address": {
+                "city": submitted_city,
+                "pincode": submitted_pincode,
             }
         }), 400
 

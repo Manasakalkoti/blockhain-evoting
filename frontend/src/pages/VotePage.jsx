@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import api from '../api/client'
 import { castVote } from '../services/castVote'
-import { getConnectedAddress, checkHasVoted } from '../services/web3'
+import { connectWallet, getConnectedAddress, checkHasVoted } from '../services/web3'
 
 export default function VotePage() {
   const { id } = useParams()
@@ -14,6 +14,7 @@ export default function VotePage() {
   const [confirming, setConfirming] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [connectingWallet, setConnectingWallet] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [error, setError] = useState('')
   const [txHash, setTxHash] = useState('')
@@ -27,7 +28,7 @@ export default function VotePage() {
         return data.election
       })
       .then(async (el) => {
-        // Check if user has a connected wallet and has already voted on-chain
+        // Check if MetaMask already has an account connected (no popup)
         const addr = await getConnectedAddress()
         if (addr) {
           setWalletAddress(addr)
@@ -40,6 +41,23 @@ export default function VotePage() {
       .catch(() => setError('Failed to load election'))
       .finally(() => setLoading(false))
   }, [id])
+
+  async function handleConnectWallet() {
+    setConnectingWallet(true)
+    setError('')
+    try {
+      const { address } = await connectWallet()
+      setWalletAddress(address)
+      if (election?.contract_address) {
+        const voted = await checkHasVoted(election.contract_address, address)
+        setAlreadyVoted(voted)
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to connect wallet')
+    } finally {
+      setConnectingWallet(false)
+    }
+  }
 
   async function handleVote() {
     setSubmitting(true)
@@ -156,8 +174,19 @@ export default function VotePage() {
             Wallet connected: <span className="font-mono">{walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}</span>
           </div>
         ) : (
-          <div className="mb-4 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
-            MetaMask not connected — your wallet will be requested when you confirm your vote.
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+            <p className="text-sm text-amber-800 font-medium mb-1">MetaMask wallet required</p>
+            <p className="text-xs text-amber-700 mb-3">
+              You must connect your MetaMask wallet to cast a vote. Your vote is signed directly
+              from your wallet — the backend cannot alter it.
+            </p>
+            <button
+              onClick={handleConnectWallet}
+              disabled={connectingWallet}
+              className="bg-amber-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+            >
+              {connectingWallet ? 'Connecting…' : 'Connect MetaMask'}
+            </button>
           </div>
         )}
 
@@ -207,11 +236,11 @@ export default function VotePage() {
         </div>
 
         <button
-          disabled={!selected || alreadyVoted || !hasContract}
+          disabled={!selected || alreadyVoted || !hasContract || !walletAddress}
           onClick={() => setConfirming(true)}
           className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-40"
         >
-          Review &amp; Confirm
+          {!walletAddress ? 'Connect Wallet to Vote' : 'Review & Confirm'}
         </button>
 
         {/* Confirmation modal */}
