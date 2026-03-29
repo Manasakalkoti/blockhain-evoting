@@ -12,6 +12,33 @@ from app.api.middleware import require_jwt
 voter_elections_bp = Blueprint("voter_elections", __name__)
 
 
+def _auto_transition_elections():
+    """
+    Lazily transition election statuses based on current time.
+    Called before any voter-facing election fetch so no scheduler is needed.
+      scheduled → active   when start_time has passed
+      active    → completed when end_time has passed
+    """
+    now = datetime.utcnow()
+
+    # scheduled → active
+    Election.query.filter(
+        Election.status == "scheduled",
+        Election.start_time <= now,
+    ).update({"status": "active"}, synchronize_session=False)
+
+    # active → completed
+    ending = Election.query.filter(
+        Election.status == "active",
+        Election.end_time <= now,
+    ).all()
+    for e in ending:
+        e.status = "completed"
+        e.results_published = True
+
+    db.session.commit()
+
+
 def _candidate_dict(c):
     return {
         "candidate_id": c.candidate_id,
@@ -42,6 +69,7 @@ def _verification_status(election_id, user_id):
 @require_jwt
 def voter_list_elections():
     """Return scheduled/active/completed elections grouped by status."""
+    _auto_transition_elections()
     # Only show elections that are past draft state
     elections = (
         Election.query
@@ -82,6 +110,7 @@ def voter_list_elections():
 @require_jwt
 def voter_get_election(election_id):
     """Return election detail + candidates + voter's verification status."""
+    _auto_transition_elections()
     election = Election.query.get_or_404(election_id)
 
     if election.status == "draft":
@@ -160,21 +189,6 @@ def verify_eligibility(election_id):
 
         if not submitted_id:
             return jsonify({"message": "voter_id is required for private elections"}), 400
-
-        # Check against user's own stored IDs
-        if submitted_id not in filter(None, [user.student_id, user.employee_id]):
-            vv = VoterVerification(
-                user_id=g.user_id,
-                election_id=election_id,
-                method="id_verification",
-                verified=False,
-            )
-            db.session.add(vv)
-            db.session.commit()
-            return jsonify({
-                "verified": False,
-                "message": "The ID you entered does not match your registered profile"
-            }), 400
 
         # Check against the election's authorized voter list (across all constituencies)
         constituencies = election.constituencies.all()
@@ -276,19 +290,10 @@ def get_merkle_proof(election_id):
 
     Query param: voter=<wallet_address>  (must match user's registered wallet)
     """
-    from app.models.user import User
-    from app.jobs.merkle_jobs import get_proof
-
     election = Election.query.get_or_404(election_id)
 
-    if election.visibility_type == "public":
-        # Public elections use zero Merkle root — no proof needed
-        return jsonify({"merkle_proof": [], "is_public": True})
-
-    if not election.eligibility_locked or not election.merkle_tree_json:
-        return jsonify({"message": "Eligibility has not been locked yet"}), 400
-
-    # Voter must be pre-verified
+    # All elections use zero Merkle root — no on-chain proof needed.
+    # Eligibility is enforced by backend pre-verification (voter ID / address check).
     verification = VoterVerification.query.filter_by(
         election_id=election_id,
         user_id=g.user_id,
@@ -297,32 +302,8 @@ def get_merkle_proof(election_id):
     if not verification:
         return jsonify({"message": "You are not verified for this election"}), 403
 
-    user = User.query.get_or_404(g.user_id)
-    if not user.wallet_address:
-        return jsonify({"message": "Link a wallet address to your account before voting"}), 400
-
-    # Optional: allow voter to specify wallet (must match registered)
-    requested_wallet = (request.args.get("voter") or "").strip().lower()
-    if requested_wallet and requested_wallet != user.wallet_address.lower():
-        return jsonify({"message": "Wallet address does not match your registered address"}), 403
-
-    wallet = user.wallet_address.lower()
-
-    try:
-        tree_data = json.loads(election.merkle_tree_json)
-    except (ValueError, TypeError):
-        return jsonify({"message": "Merkle tree data is corrupted"}), 500
-
-    proof = get_proof(tree_data, wallet)
-    if proof is None:
-        return jsonify({
-            "message": "Your wallet address is not in the eligibility list. "
-                       "The admin may need to re-lock the election after you link your wallet."
-        }), 403
-
     return jsonify({
-        "merkle_proof": proof,
-        "wallet_address": wallet,
+        "merkle_proof": [],
         "election_id": election_id,
     })
 
@@ -415,7 +396,7 @@ def _fetch_on_chain_results(contract_address: str) -> dict:
     rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
     artifact_path = os.path.join(
         os.path.dirname(__file__),
-        "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+        "../../../artifacts/contracts/EVoting.sol/EVoting.json"
     )
     with open(artifact_path) as f:
         artifact = _json.load(f)

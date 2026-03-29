@@ -339,22 +339,13 @@ def lock_election(election_id):
     if election.visibility_type == "public" and not election.location_rules:
         return jsonify({"message": "Configure and lock geographic eligibility rules before locking a public election"}), 400
 
-    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
-
-    if blockchain_enabled:
-        # Real blockchain mode — offload to RQ worker (requires running worker)
-        from app import extensions
-        q = extensions.get_queue("default")
-        job = q.enqueue(lock_election_pipeline, election_id, job_timeout=300)
-        extensions.redis_client.set(f"job:lock:{election_id}", job.id, ex=3600)
-        return jsonify({"job_id": job.id, "status": "queued"})
-    else:
-        # Mock mode — run synchronously (no worker needed, avoids macOS fork crash)
-        try:
-            result = lock_election_pipeline(election_id)
-            return jsonify({"status": "finished", "result": result})
-        except Exception as exc:
-            return jsonify({"status": "failed", "error": str(exc)}), 500
+    # Always run directly — RQ worker crashes on macOS (signal 6/SIGABRT)
+    # due to fork() + web3.py interaction. Direct execution is safe and fast enough.
+    try:
+        result = lock_election_pipeline(election_id)
+        return jsonify({"status": "finished", "result": result})
+    except Exception as exc:
+        return jsonify({"status": "failed", "error": str(exc)}), 500
 
 
 # ── End Election (calls endElection on contract) ──────────────────────────────
@@ -383,6 +374,34 @@ def end_election_route(election_id):
             return jsonify({"status": "finished", "result": result})
         except Exception as exc:
             return jsonify({"status": "failed", "error": str(exc)}), 500
+
+
+# ── Redeploy (dev helper — clears stale contract after Hardhat restart) ───────
+
+@elections_bp.route("/api/elections/<election_id>/redeploy", methods=["POST"])
+@require_admin
+def redeploy_election(election_id):
+    """
+    Clear the stale contract address so the election can be locked and deployed
+    again. Useful in development when the Hardhat node is restarted and all
+    previously deployed contracts are wiped.
+    """
+    from app.jobs.merkle_jobs import lock_election_pipeline
+    import os
+
+    election = Election.query.get_or_404(election_id)
+    election.contract_address = None
+    election.eligibility_locked = False
+    election.candidates_locked = False
+    election.status = "draft"
+    db.session.commit()
+
+    # Always run directly — no RQ worker needed for redeploy
+    try:
+        result = lock_election_pipeline(election_id)
+        return jsonify({"status": "finished", "result": result})
+    except Exception as exc:
+        return jsonify({"status": "failed", "error": str(exc)}), 500
 
 
 # ── Job status poll ───────────────────────────────────────────────────────────
@@ -482,7 +501,7 @@ def audit_election(election_id):
             rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
             artifact_path = os.path.join(
                 os.path.dirname(__file__),
-                "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+                "../../../artifacts/contracts/EVoting.sol/EVoting.json"
             )
             with open(artifact_path) as f:
                 artifact = _json.load(f)

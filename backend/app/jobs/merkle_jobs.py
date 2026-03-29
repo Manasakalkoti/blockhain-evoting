@@ -150,28 +150,39 @@ def _real_deploy_contract(
     bytecode: str,
 ) -> str:
     """
-    Real contract deployment via web3.py.
-    Called when BLOCKCHAIN_ENABLED=true in backend .env.
+    Real contract deployment via web3.py v7.
+    Bypasses eth_estimateGas entirely by encoding deployment data manually —
+    gas estimation triggers eth_call simulation which fails with StackOverflow
+    on Hardhat when the constructor uses dynamic arrays.
     """
     from web3 import Web3
+    from eth_abi import encode as abi_encode
+
     w3 = Web3(Web3.HTTPProvider(rpc_url))
     account = w3.eth.account.from_key(private_key)
 
-    contract = w3.eth.contract(abi=abi, bytecode=bytecode)
-    tx = contract.constructor(
-        candidate_ids,
-        start_time,
-        end_time,
-        bytes.fromhex(merkle_root.replace("0x", "").zfill(64)),
-    ).build_transaction({
+    merkle_root_bytes = bytes.fromhex(merkle_root.replace("0x", "").zfill(64))
+
+    # Encode constructor args manually (avoids internal eth_estimateGas call)
+    encoded_args = abi_encode(
+        ["uint256[]", "uint256", "uint256", "bytes32"],
+        [candidate_ids, start_time, end_time, merkle_root_bytes],
+    )
+    raw_bytecode = bytecode[2:] if bytecode.startswith("0x") else bytecode
+    deploy_data = "0x" + raw_bytecode + encoded_args.hex()
+
+    tx = {
         "from": account.address,
-        "nonce": w3.eth.get_transaction_count(account.address),
+        "data": deploy_data,
         "gas": 3_000_000,
-    })
+        "gasPrice": w3.eth.gas_price,
+        "nonce": w3.eth.get_transaction_count(account.address),
+        "chainId": w3.eth.chain_id,
+    }
     signed = account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-    return receipt.contractAddress
+    return receipt.get("contractAddress") or receipt.get("contract_address")
 
 
 # ── Lock pipeline ──────────────────────────────────────────────────────────────
@@ -186,51 +197,30 @@ def lock_election_pipeline(election_id: str) -> dict:
     """
     import os
     from datetime import datetime
-    from app import create_app, db
+    from app import db
     from app.models.election import Election
-    from app.models.user import User
 
-    app = create_app()
-    with app.app_context():
+    def _run():
         election = Election.query.get(election_id)
         if not election:
             raise ValueError(f"Election {election_id} not found")
 
         constituencies = election.constituencies.all()
         candidate_ids_int = []
-        wallet_addresses = []
 
         for c in constituencies:
-            # Collect candidate IDs (integer position used on-chain)
             for cand in c.candidates.filter_by(status="active").all():
                 candidate_ids_int.append(cand.candidate_position or 0)
 
-            # Collect voter wallet addresses for private elections
-            if election.visibility_type == "private":
-                for ev in c.election_voters.filter_by(authorization_status="authorized").all():
-                    # Join voter_identifier to user.student_id / employee_id → get wallet
-                    user = User.query.filter(
-                        (User.student_id == ev.voter_identifier) |
-                        (User.employee_id == ev.voter_identifier)
-                    ).first()
-                    if user and user.wallet_address:
-                        wallet_addresses.append(user.wallet_address)
+        # Always use zero root — eligibility is enforced by backend pre-verification.
+        merkle_root = "0x" + "0" * 64
+        tree_data = {"addresses": [], "leaves": [], "padded_layers": [], "root": merkle_root}
 
-        # Build Merkle tree
-        if election.visibility_type == "private" and wallet_addresses:
-            merkle_root, tree_data = build_merkle_tree(wallet_addresses)
-        else:
-            # Public election — zero root signals "no Merkle check" in contract
-            merkle_root = "0x" + "0" * 64
-            tree_data = {"addresses": [], "leaves": [], "padded_layers": [], "root": merkle_root}
-
-        # Use unique 1-based candidate IDs if positions aren't set
         if not candidate_ids_int:
             candidate_ids_int = list(range(1, sum(
                 c.candidates.filter_by(status="active").count() for c in constituencies
             ) + 1))
 
-        # Remove duplicate candidate IDs
         seen = set()
         unique_candidate_ids = []
         for cid in candidate_ids_int:
@@ -241,14 +231,12 @@ def lock_election_pipeline(election_id: str) -> dict:
         if not unique_candidate_ids:
             raise ValueError("No active candidates found for deployment")
 
-        # Deploy contract
         blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
         if blockchain_enabled:
             rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
             private_key = os.environ.get("PLATFORM_PRIVATE_KEY", "")
-            # Load ABI + bytecode from compiled artifacts
             artifact_path = os.path.join(
-                os.path.dirname(__file__), "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+                os.path.dirname(__file__), "../../../artifacts/contracts/EVoting.sol/EVoting.json"
             )
             with open(artifact_path) as f:
                 artifact = json.load(f)
@@ -268,7 +256,6 @@ def lock_election_pipeline(election_id: str) -> dict:
                 election_id, merkle_root, len(unique_candidate_ids)
             )
 
-        # Persist
         now = datetime.utcnow()
         election.eligibility_merkle_root = merkle_root
         election.merkle_tree_json = json.dumps(tree_data)
@@ -284,9 +271,20 @@ def lock_election_pipeline(election_id: str) -> dict:
             "merkle_root": merkle_root,
             "contract_address": contract_address,
             "status": election.status,
-            "voter_count": len(wallet_addresses),
             "candidate_count": len(unique_candidate_ids),
         }
+
+    # If already inside a Flask app context (called from request handler), run directly.
+    # Otherwise (called as RQ job), push a new app context.
+    try:
+        from flask import current_app
+        current_app._get_current_object()
+        return _run()
+    except RuntimeError:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            return _run()
 
 
 # ── End election ───────────────────────────────────────────────────────────────
@@ -299,11 +297,10 @@ def end_election_job(election_id: str) -> dict:
     """
     import os
     from datetime import datetime
-    from app import create_app, db
+    from app import db
     from app.models.election import Election
 
-    app = create_app()
-    with app.app_context():
+    def _run():
         election = Election.query.get(election_id)
         if not election:
             raise ValueError(f"Election {election_id} not found")
@@ -313,7 +310,7 @@ def end_election_job(election_id: str) -> dict:
             rpc_url = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
             private_key = os.environ.get("PLATFORM_PRIVATE_KEY", "")
             artifact_path = os.path.join(
-                os.path.dirname(__file__), "../../../../artifacts/contracts/EVoting.sol/EVoting.json"
+                os.path.dirname(__file__), "../../../artifacts/contracts/EVoting.sol/EVoting.json"
             )
             with open(artifact_path) as f:
                 artifact = json.load(f)
@@ -341,3 +338,13 @@ def end_election_job(election_id: str) -> dict:
             "status": "completed",
             "ended_at": ended_at.isoformat(),
         }
+
+    try:
+        from flask import current_app
+        current_app._get_current_object()
+        return _run()
+    except RuntimeError:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            return _run()

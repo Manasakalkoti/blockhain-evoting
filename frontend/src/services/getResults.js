@@ -1,20 +1,34 @@
 /**
  * getResults — fetch election results from the blockchain (read-only, free, no gas).
  *
- * Calls getResults() view function on the deployed EVoting contract.
- * No MetaMask popup — uses a read-only JSON-RPC provider.
- *
- * Returns an array of { candidateId, votes } objects.
+ * Uses eth_call directly via window.ethereum — no Provider created, no polling,
+ * no eth_blockNumber calls that flood the console with "-32002" errors.
  */
-import { getReadOnlyContract } from './web3';
+import { ethers } from 'ethers';
+
+const IFACE = new ethers.Interface([
+  'function getResults() view returns (uint256[] ids, uint256[] counts)',
+  'function hasVoted(address) view returns (bool)',
+]);
+
+async function ethCall(contractAddress, fragment, args = []) {
+  const provider = window.ethereum
+    ? window.ethereum
+    : { request: () => { throw new Error('No provider'); } };
+  const calldata = IFACE.encodeFunctionData(fragment, args);
+  const result = await provider.request({
+    method: 'eth_call',
+    params: [{ to: contractAddress, data: calldata }, 'latest'],
+  });
+  return IFACE.decodeFunctionResult(fragment, result);
+}
 
 /**
  * @param {string} contractAddress - Deployed EVoting contract address
  * @returns {{ candidateId: number, votes: number }[]}
  */
 export async function fetchResultsFromChain(contractAddress) {
-  const contract = getReadOnlyContract(contractAddress);
-  const [candidateIds, voteCounts] = await contract.getResults();
+  const [candidateIds, voteCounts] = await ethCall(contractAddress, 'getResults');
   return candidateIds.map((id, i) => ({
     candidateId: Number(id),
     votes: Number(voteCounts[i]),
@@ -23,14 +37,11 @@ export async function fetchResultsFromChain(contractAddress) {
 
 /**
  * Check on-chain if a specific wallet has already voted.
- * @param {string} contractAddress
- * @param {string} walletAddress
- * @returns {boolean}
  */
 export async function hasVotedOnChain(contractAddress, walletAddress) {
   try {
-    const contract = getReadOnlyContract(contractAddress);
-    return await contract.hasVoted(walletAddress);
+    const [result] = await ethCall(contractAddress, 'hasVoted', [walletAddress]);
+    return result;
   } catch {
     return false;
   }

@@ -1,37 +1,57 @@
 /**
  * Web3 wallet connection utilities.
  *
- * connectWallet()         — request MetaMask account access, return { provider, signer, address }
- * getElectionContract()   — return a Contract instance connected to a signer (for voting)
- * getReadOnlyContract()   — return a Contract instance with read-only provider (for results)
- * getWalletAddress()      — return connected wallet address without full connection prompt
+ * All functions use window.ethereum.request directly — no ethers Provider is
+ * ever created here. This prevents MetaMask from being triggered into its
+ * eth_blockNumber polling loop which causes -32002 "too many errors" floods.
  */
 import { ethers } from 'ethers';
-import { EVOTING_ABI } from '../contracts/ElectionABI';
 
-// RPC URL for read-only calls (no wallet needed).
-// In local dev this points to Hardhat. In production, use Alchemy Sepolia.
-const READ_ONLY_RPC = import.meta.env.VITE_RPC_URL || 'http://127.0.0.1:8545';
+const HARDHAT_CHAIN_ID = '0x7a69'; // 31337 decimal
 
 /**
- * Connect to MetaMask and return provider + signer.
- * Throws if MetaMask is not installed.
+ * Ensure MetaMask is on the Hardhat local network (chainId 1337).
+ * A chainId mismatch is the most common cause of MetaMask's -32002 backoff.
+ */
+async function ensureHardhatNetwork() {
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: HARDHAT_CHAIN_ID }],
+    });
+  } catch (err) {
+    if (err.code === 4902) {
+      // Network not in MetaMask yet — add it
+      await window.ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: HARDHAT_CHAIN_ID,
+          chainName: 'Hardhat Local',
+          rpcUrls: ['http://127.0.0.1:8545'],
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        }],
+      });
+    }
+    // Ignore user dismissal or other non-fatal errors
+  }
+}
+
+/**
+ * Connect to MetaMask and return the wallet address.
+ * Switches to Hardhat network first to prevent chainId-mismatch RPC errors.
  */
 export async function connectWallet() {
   if (!window.ethereum) {
     throw new Error('MetaMask is not installed. Please install the MetaMask browser extension to vote.');
   }
-
-  await window.ethereum.request({ method: 'eth_requestAccounts' });
-  const provider = new ethers.BrowserProvider(window.ethereum);
-  const signer = await provider.getSigner();
-  const address = await signer.getAddress();
-
-  return { provider, signer, address };
+  await ensureHardhatNetwork();
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const address = accounts[0].toLowerCase();
+  return { address };
 }
 
 /**
- * Return the currently connected wallet address without triggering a full connection.
+ * Return the currently connected wallet address without triggering a connection popup.
  * Returns null if MetaMask is not connected.
  */
 export async function getConnectedAddress() {
@@ -45,31 +65,20 @@ export async function getConnectedAddress() {
 }
 
 /**
- * Return a Contract instance connected to the voter's MetaMask signer.
- * Used for state-changing calls (castVote) — MetaMask will prompt for signature.
- */
-export function getElectionContract(contractAddress, signer) {
-  return new ethers.Contract(contractAddress, EVOTING_ABI, signer);
-}
-
-/**
- * Return a read-only Contract instance (no MetaMask needed).
- * Used for view calls like getResults() and hasVoted().
- */
-export function getReadOnlyContract(contractAddress) {
-  const provider = new ethers.JsonRpcProvider(READ_ONLY_RPC);
-  return new ethers.Contract(contractAddress, EVOTING_ABI, provider);
-}
-
-/**
  * Check if the voter's wallet address has already voted in the given contract.
- * Free view call — no gas, no MetaMask popup.
+ * Uses eth_call directly — no Provider created, no polling.
  */
 export async function checkHasVoted(contractAddress, walletAddress) {
+  if (!window.ethereum) return false;
   try {
-    const contract = getReadOnlyContract(contractAddress);
-    return await contract.hasVoted(walletAddress);
+    const iface = new ethers.Interface(['function hasVoted(address) view returns (bool)']);
+    const calldata = iface.encodeFunctionData('hasVoted', [walletAddress]);
+    const result = await window.ethereum.request({
+      method: 'eth_call',
+      params: [{ to: contractAddress, data: calldata }, 'latest'],
+    });
+    return iface.decodeFunctionResult('hasVoted', result)[0];
   } catch {
-    return false; // contract not reachable — backend is source of truth
+    return false;
   }
 }

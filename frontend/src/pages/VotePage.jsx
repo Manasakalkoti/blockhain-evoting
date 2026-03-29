@@ -48,6 +48,17 @@ export default function VotePage() {
     try {
       const { address } = await connectWallet()
       setWalletAddress(address)
+
+      // Save wallet address to backend profile so Merkle proof generation works
+      try {
+        await api.put('/api/auth/wallet', { wallet_address: address })
+      } catch (saveErr) {
+        // If already linked to this account, ignore — otherwise warn
+        if (saveErr.response?.status !== 409) {
+          console.warn('Could not save wallet address to profile:', saveErr.message)
+        }
+      }
+
       if (election?.contract_address) {
         const voted = await checkHasVoted(election.contract_address, address)
         setAlreadyVoted(voted)
@@ -88,6 +99,8 @@ export default function VotePage() {
       // MetaMask rejection shows as ACTION_REJECTED
       if (err.code === 'ACTION_REJECTED' || err.message?.includes('rejected')) {
         setError('Transaction rejected in MetaMask.')
+      } else if (err.code === -32002 || err.message?.includes('too many errors') || err.message?.includes('RPC endpoint')) {
+        setError('MetaMask is temporarily busy with the local node. Wait a few seconds and try again.')
       } else if (err.response?.data?.message) {
         setError(err.response.data.message)
       } else {

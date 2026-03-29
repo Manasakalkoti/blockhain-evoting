@@ -611,7 +611,11 @@ export default function AdminElectionDetailPage() {
         { headers: { 'Content-Type': 'multipart/form-data' } }
       )
       setCsvFile(null)
-      startCsvPoll(data.job_id)
+      if (data.job_id) {
+        startCsvPoll(data.job_id)
+      } else {
+        reload()
+      }
     } catch (err) {
       alert(err.response?.data?.message || 'Upload failed')
     } finally {
@@ -624,10 +628,8 @@ export default function AdminElectionDetailPage() {
     try {
       const { data } = await api.post(`/api/elections/${id}/lock`)
       if (data.job_id) {
-        // Blockchain mode — worker handles it, poll for status
         startLockPoll(data.job_id)
       } else {
-        // Mock mode — result is immediate
         if (data.status === 'failed') {
           alert(data.error || 'Lock failed')
         } else {
@@ -636,6 +638,16 @@ export default function AdminElectionDetailPage() {
       }
     } catch (err) {
       alert(err.response?.data?.message || err.response?.data?.error || 'Lock failed')
+    }
+  }
+
+  async function handleRedeploy() {
+    if (!confirm('Clear the stale contract address and redeploy? Use this after restarting the Hardhat node.')) return
+    try {
+      await api.post(`/api/elections/${id}/redeploy`)
+      reload()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Redeploy failed')
     }
   }
 
@@ -758,6 +770,14 @@ export default function AdminElectionDetailPage() {
                 <dt className="text-gray-400">Contract address</dt>
                 <dd className="text-gray-700 font-mono text-xs break-all mt-0.5">
                   {election.contract_address}
+                </dd>
+                <dd className="mt-1">
+                  <button
+                    onClick={handleRedeploy}
+                    className="text-xs text-amber-600 underline hover:text-amber-800"
+                  >
+                    Redeploy (use after Hardhat restart)
+                  </button>
                 </dd>
               </div>
             ) : (election.status !== 'draft') && (

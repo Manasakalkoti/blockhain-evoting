@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify
 from app.models.election import Election
 from app.api.middleware import require_admin
-from app import extensions
 
 voters_bp = Blueprint("voters", __name__)
 
@@ -34,14 +33,9 @@ def upload_voters(election_id):
     if not constituency:
         return jsonify({"message": "No constituency found for this election"}), 400
 
-    q = extensions.get_queue("default")
-    job = q.enqueue(
-        process_csv_upload,
-        election_id,
-        constituency.constituency_id,
-        csv_content,
-        job_timeout=120,
-    )
-    extensions.redis_client.set(f"job:csv:{election_id}", job.id, ex=3600)
-
-    return jsonify({"job_id": job.id, "status": "queued"})
+    # Run directly — RQ worker crashes on macOS (signal 6/SIGABRT)
+    try:
+        result = process_csv_upload(election_id, constituency.constituency_id, csv_content)
+        return jsonify({"status": "finished", "result": result})
+    except Exception as exc:
+        return jsonify({"status": "failed", "error": str(exc)}), 500

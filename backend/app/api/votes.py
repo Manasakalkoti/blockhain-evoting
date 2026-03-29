@@ -57,21 +57,22 @@ def confirm_vote():
     if not verification:
         return jsonify({"message": "Voter not verified for this election"}), 403
 
-    # Prevent duplicate tx hash
+    # If this exact tx_hash was already recorded, treat as success (idempotent)
     existing = VoteTransaction.query.filter_by(blockchain_tx_hash=tx_hash).first()
     if existing:
-        return jsonify({"message": "Transaction hash already recorded"}), 409
+        return jsonify({"success": True, "tx_hash": tx_hash, "message": "Vote transaction recorded"}), 200
 
-    # Prevent double recording for same voter+election
+    # If voter already has a vote recorded for this election, return that tx_hash
     already_recorded = VoteTransaction.query.filter_by(
         election_id=election_id,
         voter_id=g.user_id,
     ).first()
     if already_recorded:
         return jsonify({
-            "message": "Vote already recorded",
+            "success": True,
             "tx_hash": already_recorded.blockchain_tx_hash,
-        }), 409
+            "message": "Vote transaction recorded",
+        }), 200
 
     vt = VoteTransaction(
         election_id=election_id,

@@ -230,6 +230,13 @@ function WalletLinkSection({ initialWallet, onLinked }) {
   // Detect if a wallet is already linked (passed in from profile or updated here)
   const linked = wallet && wallet.startsWith('0x')
 
+  // When an already-connected wallet is passed in, ensure it's saved to the backend
+  useEffect(() => {
+    if (initialWallet && initialWallet.startsWith('0x')) {
+      api.put('/api/auth/wallet', { wallet_address: initialWallet }).catch(() => {})
+    }
+  }, [initialWallet])
+
   async function handleLink() {
     setLinking(true)
     setError('')
@@ -298,8 +305,13 @@ export default function ElectionDetailPage() {
     if (user?.wallet_address) {
       setLinkedWallet(user.wallet_address)
     } else {
-      // Non-intrusive check: see if MetaMask is already connected
-      getConnectedAddress().then((addr) => { if (addr) setLinkedWallet(addr) })
+      // Non-intrusive check: see if MetaMask is already connected, then save to backend
+      getConnectedAddress().then((addr) => {
+        if (addr) {
+          setLinkedWallet(addr)
+          api.put('/api/auth/wallet', { wallet_address: addr }).catch(() => {})
+        }
+      })
     }
   }, [user])
 

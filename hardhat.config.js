@@ -3,10 +3,17 @@ require('dotenv').config();
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-  solidity: '0.8.20',
+  solidity: {
+    version: '0.8.20',
+    settings: {
+      evmVersion: 'paris',
+    },
+  },
   networks: {
     // Local dev — instant blocks, 10,000 pre-funded test accounts
-    hardhat: {},
+    hardhat: {
+      chainId: 31337,
+    },
     // Sepolia testnet — for final demo
     sepolia: {
       url: process.env.ALCHEMY_SEPOLIA_URL || '',

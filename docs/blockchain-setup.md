@@ -20,6 +20,7 @@ This document covers the full blockchain layer of the e-voting platform: the sma
 12. [Running Locally (Step-by-Step)](#12-running-locally-step-by-step)
 13. [Deploying to Sepolia Testnet](#13-deploying-to-sepolia-testnet)
 14. [Testing the Contract](#14-testing-the-contract)
+15. [Connecting MetaMask to the Frontend — Full Procedure](#15-connecting-metamask-to-the-frontend--full-procedure)
 
 ---
 
@@ -654,6 +655,168 @@ npx hardhat test
 | endElection | Only admin can call, emits `ElectionEnded` event |
 
 Tests use `@openzeppelin/merkle-tree`'s `StandardMerkleTree` to generate valid proofs, ensuring the Python tree implementation and the JavaScript test tree produce compatible proofs against the same Solidity verification logic.
+
+---
+
+## 15. Connecting MetaMask to the Frontend — Full Procedure
+
+This section documents the exact steps and fixes required to connect MetaMask to the local Hardhat node and successfully cast votes from the frontend.
+
+---
+
+### 15.1 Why Standard Setup Fails
+
+When connecting MetaMask to a local Hardhat node, three issues occur by default:
+
+| Problem | Root Cause | Fix Applied |
+|---|---|---|
+| `TransactionExecutionError: StackOverflow` on deployment | Solidity 0.8.20 compiles for the `shanghai` EVM (`PUSH0` opcode) which Hardhat 2 doesn't support | Added `evmVersion: "paris"` to hardhat.config.js |
+| MetaMask `-32002` "RPC endpoint returned too many errors" | ethers.js v6 `BrowserProvider` / `JsonRpcProvider` auto-polls `eth_blockNumber` on every Provider construction, flooding the local node | Removed all ethers Provider creation; replaced with direct `window.ethereum.request` calls |
+| MetaMask confirm button disabled / transaction fails silently | Wallet has 0 ETH on the local network (own MetaMask account, not a Hardhat test account) | Import a Hardhat pre-funded test account |
+
+---
+
+### 15.2 Hardhat Configuration (hardhat.config.js)
+
+The root `hardhat.config.js` must have:
+
+```js
+solidity: {
+  version: '0.8.20',
+  settings: {
+    evmVersion: 'paris',   // REQUIRED — prevents StackOverflow on Hardhat 2
+  },
+},
+networks: {
+  hardhat: {
+    chainId: 31337,        // Must match MetaMask network config
+  },
+},
+```
+
+**Why `paris`?**
+Solidity 0.8.20+ defaults to the `shanghai` EVM which includes the `PUSH0` opcode (EIP-3855). Hardhat 2's EVM does not support this opcode. Deploying `shanghai`-compiled bytecode on Hardhat 2 causes `TransactionExecutionError: StackOverflow` silently — the contract cannot be deployed at all. Setting `evmVersion: "paris"` compiles without `PUSH0` and resolves this.
+
+**Why `chainId: 31337`?**
+Hardhat's default chainId is `31337`. MetaMask's built-in "Localhost 8545" preset also uses `31337`. Using any other chainId (e.g. `1337`) causes a mismatch: MetaMask's background health-check polls (`eth_blockNumber`, `eth_chainId`) return inconsistent results, which triggers MetaMask's internal backoff and floods all subsequent requests with `-32002` errors.
+
+After any change to `hardhat.config.js`, recompile:
+```bash
+npx hardhat compile
+```
+
+---
+
+### 15.3 MetaMask Network Setup (One-Time)
+
+1. Open MetaMask → click the network dropdown at the top
+2. Click **Add a custom network**
+3. Fill in:
+   - **Network Name**: `Hardhat Local`
+   - **New RPC URL**: `http://127.0.0.1:8545`
+   - **Chain ID**: `31337`
+   - **Currency Symbol**: `ETH`
+4. Click **Save** and switch to `Hardhat Local`
+
+> If you previously added Localhost 8545 with Chain ID `1337`, delete it and add a new entry with `31337`.
+
+---
+
+### 15.4 Import a Pre-Funded Test Account
+
+Your personal MetaMask wallet has 0 ETH on the local Hardhat network. MetaMask will disable the "Confirm" button on any transaction if there is no ETH for gas.
+
+When `npx hardhat node` starts, it prints 20 pre-funded accounts, each with **10,000 ETH**. Import one:
+
+1. Copy a private key from the Hardhat node output, e.g.:
+   ```
+   Account #0: 0xf39Fd6e51aad88F6f4ce6aB8827279cffFb92266
+   Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+   ```
+2. In MetaMask → click the account icon (top right) → **Import Account**
+3. Paste the private key → **Import**
+4. Switch to that account — it will show 10,000 ETH on the Hardhat Local network
+
+> **Warning**: Never use these private keys on any real network. They are publicly known.
+
+---
+
+### 15.5 Reset MetaMask Account (When Errors Persist)
+
+When the Hardhat node restarts, all on-chain state is wiped. MetaMask caches the nonce and transaction history of your account, which becomes stale and causes errors.
+
+After restarting `npx hardhat node`, always reset the MetaMask account:
+
+1. MetaMask → click the account icon → **Settings**
+2. **Advanced** → **Reset Account**
+3. Confirm
+
+This clears MetaMask's cached nonce and transaction list for the current network. It does **not** delete your account or private key.
+
+---
+
+### 15.6 Auto Network Switch (Frontend Code)
+
+`frontend/src/services/web3.js` includes `ensureHardhatNetwork()` which automatically switches MetaMask to the correct network (chainId `31337`) every time `connectWallet()` is called:
+
+```js
+async function ensureHardhatNetwork() {
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x7a69' }],  // 31337
+    });
+  } catch (err) {
+    if (err.code === 4902) {
+      // Network not in MetaMask yet — add it automatically
+      await window.ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: '0x7a69',
+          chainName: 'Hardhat Local',
+          rpcUrls: ['http://127.0.0.1:8545'],
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        }],
+      });
+    }
+  }
+}
+```
+
+MetaMask will show a **one-time popup** asking the user to approve the network switch. After approval, all subsequent `connectWallet()` calls switch silently.
+
+---
+
+### 15.7 Avoiding the -32002 RPC Flood
+
+The `-32002 "RPC endpoint returned too many errors"` error is caused by ethers.js v6 automatically polling `eth_blockNumber` whenever a `BrowserProvider` or `JsonRpcProvider` is constructed. On a local Hardhat node this overwhelms the JSON-RPC server.
+
+**All ethers Provider construction has been removed from the frontend.** The following replacements are in place:
+
+| Old (caused -32002) | New (no polling) |
+|---|---|
+| `new ethers.BrowserProvider(window.ethereum)` | `window.ethereum.request({ method: 'eth_requestAccounts' })` |
+| `new ethers.JsonRpcProvider('http://127.0.0.1:8545')` | Removed entirely |
+| `contract.castVote(...)` via ethers Contract | `window.ethereum.request({ method: 'eth_sendTransaction', params: [...] })` |
+| `tx.wait()` for confirmation | Removed — `txHash` returned immediately from `eth_sendTransaction` |
+| `contract.hasVoted(address)` | `window.ethereum.request({ method: 'eth_call', ... })` |
+| `contract.getResults()` | `window.ethereum.request({ method: 'eth_call', ... })` |
+
+The only ethers import remaining is `ethers.Interface` — used purely for ABI encoding/decoding, which is a local CPU operation and makes zero network calls.
+
+---
+
+### 15.8 Full Checklist Before Casting a Vote
+
+- [ ] `npx hardhat compile` run after any contract or config change
+- [ ] `npx hardhat node` running in a terminal (keep it open)
+- [ ] MetaMask network set to `Hardhat Local` (Chain ID `31337`, RPC `http://127.0.0.1:8545`)
+- [ ] MetaMask account is a Hardhat test account (has ETH)
+- [ ] MetaMask account was **Reset** after the last Hardhat node restart
+- [ ] Election has been locked by admin (contract deployed, `contract_address` saved in DB)
+- [ ] Voter has completed pre-verification for the election
+- [ ] Backend (`python run.py`) and RQ worker running
+- [ ] `BLOCKCHAIN_ENABLED=true` in `backend/.env` (for real on-chain deployment)
 
 ---
 
