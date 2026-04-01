@@ -27,6 +27,14 @@ def _auto_transition_elections():
         Election.start_time <= now,
     ).update({"status": "active"}, synchronize_session=False)
 
+    # locked draft (contract deployed) whose start_time has passed → active
+    Election.query.filter(
+        Election.status == "draft",
+        Election.eligibility_locked == True,
+        Election.contract_address.isnot(None),
+        Election.start_time <= now,
+    ).update({"status": "active"}, synchronize_session=False)
+
     # active → completed
     ending = Election.query.filter(
         Election.status == "active",

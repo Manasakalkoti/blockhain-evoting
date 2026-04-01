@@ -588,6 +588,18 @@ export default function AdminElectionDetailPage() {
       .finally(() => setVotersLoading(false))
   }
 
+  async function handleClearVoters() {
+    if (!confirm('Remove all uploaded voter IDs? You can then upload a new CSV.')) return
+    try {
+      const { data } = await api.delete(`/api/elections/${id}/voters`)
+      alert(data.message)
+      setVoters(null)
+      reload()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to clear voters')
+    }
+  }
+
   async function handleDeleteCandidate(cid) {
     if (!confirm('Remove this candidate?')) return
     try {
@@ -890,13 +902,23 @@ export default function AdminElectionDetailPage() {
                   </span>
                 )}
               </h2>
-              <button
-                onClick={loadVoters}
-                disabled={votersLoading}
-                className="text-indigo-600 hover:text-indigo-700 text-sm font-medium disabled:opacity-50"
-              >
-                {votersLoading ? 'Loading…' : voters ? 'Refresh' : 'Load list'}
-              </button>
+              <div className="flex items-center gap-3">
+                {isDraft && !election?.eligibility_locked && voters?.total > 0 && (
+                  <button
+                    onClick={handleClearVoters}
+                    className="text-red-500 hover:text-red-600 text-sm font-medium"
+                  >
+                    Clear List
+                  </button>
+                )}
+                <button
+                  onClick={loadVoters}
+                  disabled={votersLoading}
+                  className="text-indigo-600 hover:text-indigo-700 text-sm font-medium disabled:opacity-50"
+                >
+                  {votersLoading ? 'Loading…' : voters ? 'Refresh' : 'Load list'}
+                </button>
+              </div>
             </div>
 
             {voters && voters.voters.length > 0 ? (

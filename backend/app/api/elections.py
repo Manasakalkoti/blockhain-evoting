@@ -99,6 +99,8 @@ def _election_detail(election):
 @elections_bp.route("/api/elections", methods=["GET"])
 @require_admin
 def list_elections():
+    from app.api.voter_elections import _auto_transition_elections
+    _auto_transition_elections()
     elections = Election.query.order_by(Election.created_at.desc()).all()
     return jsonify({"elections": [_election_summary(e) for e in elections]})
 
@@ -163,6 +165,8 @@ def create_election():
 @elections_bp.route("/api/elections/<election_id>", methods=["GET"])
 @require_admin
 def get_election(election_id):
+    from app.api.voter_elections import _auto_transition_elections
+    _auto_transition_elections()
     election = Election.query.get_or_404(election_id)
     return jsonify({"election": _election_detail(election)})
 
@@ -360,20 +364,12 @@ def end_election_route(election_id):
     if election.status not in ("active", "scheduled"):
         return jsonify({"message": "Election must be active or scheduled to end"}), 400
 
-    blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
-
-    if blockchain_enabled:
-        from app import extensions
-        q = extensions.get_queue("default")
-        job = q.enqueue(end_election_job, election_id, job_timeout=120)
-        extensions.redis_client.set(f"job:end:{election_id}", job.id, ex=3600)
-        return jsonify({"job_id": job.id, "status": "queued"})
-    else:
-        try:
-            result = end_election_job(election_id)
-            return jsonify({"status": "finished", "result": result})
-        except Exception as exc:
-            return jsonify({"status": "failed", "error": str(exc)}), 500
+    # Run directly — RQ worker crashes on macOS (signal 6/SIGABRT)
+    try:
+        result = end_election_job(election_id)
+        return jsonify({"status": "finished", "result": result})
+    except Exception as exc:
+        return jsonify({"status": "failed", "error": str(exc)}), 500
 
 
 # ── Redeploy (dev helper — clears stale contract after Hardhat restart) ───────

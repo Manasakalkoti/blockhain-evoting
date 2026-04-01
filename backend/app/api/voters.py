@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
+from app import db
 from app.models.election import Election
+from app.models.election_voter import ElectionVoter
 from app.api.middleware import require_admin
 
 voters_bp = Blueprint("voters", __name__)
@@ -39,3 +41,24 @@ def upload_voters(election_id):
         return jsonify({"status": "finished", "result": result})
     except Exception as exc:
         return jsonify({"status": "failed", "error": str(exc)}), 500
+
+
+@voters_bp.route("/api/elections/<election_id>/voters", methods=["DELETE"])
+@require_admin
+def clear_voters(election_id):
+    """Remove all uploaded voter IDs so a new CSV can be uploaded."""
+    election = Election.query.get_or_404(election_id)
+    if election.status != "draft":
+        return jsonify({"message": "Can only clear voters on a draft election"}), 400
+    if election.eligibility_locked:
+        return jsonify({"message": "Voter eligibility is already locked"}), 400
+
+    constituency = election.constituencies.first()
+    if not constituency:
+        return jsonify({"message": "No constituency found"}), 400
+
+    deleted = ElectionVoter.query.filter_by(
+        constituency_id=constituency.constituency_id
+    ).delete()
+    db.session.commit()
+    return jsonify({"message": f"Cleared {deleted} voter records"})

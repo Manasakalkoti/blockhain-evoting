@@ -325,7 +325,8 @@ def end_election_job(election_id: str) -> dict:
                 "gas": 100_000,
             })
             signed = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            raw = signed.raw_transaction if hasattr(signed, 'raw_transaction') else signed.rawTransaction
+            tx_hash = w3.eth.send_raw_transaction(raw)
             w3.eth.wait_for_transaction_receipt(tx_hash)
 
         ended_at = datetime.utcnow()
