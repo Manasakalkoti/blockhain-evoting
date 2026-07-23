@@ -52,3 +52,8 @@ contracts/artifacts/
 contracts/cache/
 contracts/typechain-types/
 .openzeppelin/
+artifacts/
+cache/
+
+# PDFs and docs
+*.pdf

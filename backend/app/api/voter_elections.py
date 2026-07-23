@@ -19,7 +19,7 @@ def _auto_transition_elections():
       scheduled → active   when start_time has passed
       active    → completed when end_time has passed
     """
-    now = datetime.utcnow()
+    now = datetime.now()
 
     # scheduled → active
     Election.query.filter(
@@ -71,7 +71,144 @@ def _verification_status(election_id, user_id):
     return "verified" if vv.verified else "not_eligible"
 
 
-# ── Voter Elections List ──────────────────────────────────────────────────────
+# ── Follow / Unfollow Organisation ───────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/follow/<org_id>", methods=["POST"])
+@require_jwt
+def follow_org(org_id):
+    from app.models.voter_followed_org import VoterFollowedOrg
+    from app.models.organization import Organization
+    org = Organization.query.filter_by(organization_id=org_id, verified=True, deleted=False).first()
+    if not org:
+        return jsonify({"message": "Organisation not found"}), 404
+    existing = VoterFollowedOrg.query.filter_by(user_id=g.user_id, organization_id=org_id).first()
+    if existing:
+        return jsonify({"message": "Already following", "following": True})
+    follow = VoterFollowedOrg(user_id=g.user_id, organization_id=org_id)
+    db.session.add(follow)
+    db.session.commit()
+    return jsonify({"message": f"Now following {org.name}", "following": True})
+
+
+@voter_elections_bp.route("/api/voter/follow/<org_id>", methods=["DELETE"])
+@require_jwt
+def unfollow_org(org_id):
+    from app.models.voter_followed_org import VoterFollowedOrg
+    VoterFollowedOrg.query.filter_by(user_id=g.user_id, organization_id=org_id).delete()
+    db.session.commit()
+    return jsonify({"message": "Unfollowed", "following": False})
+
+
+@voter_elections_bp.route("/api/voter/following", methods=["GET"])
+@require_jwt
+def get_following():
+    """Return list of orgs the voter follows + their active/upcoming elections."""
+    from app.models.voter_followed_org import VoterFollowedOrg
+    from app.models.organization import Organization
+    _auto_transition_elections()
+
+    follows = VoterFollowedOrg.query.filter_by(user_id=g.user_id).all()
+    result = []
+    for f in follows:
+        org = Organization.query.get(f.organization_id)
+        if not org or org.deleted:
+            continue
+        elections = (
+            Election.query
+            .filter(
+                Election.organization_id == org.organization_id,
+                Election.status.in_(["scheduled", "active"])
+            )
+            .order_by(Election.start_time.asc())
+            .limit(3)
+            .all()
+        )
+        result.append({
+            "organization_id": org.organization_id,
+            "name": org.name,
+            "type": org.type,
+            "elections": [
+                {
+                    "election_id": e.election_id,
+                    "title": e.title,
+                    "status": e.status,
+                    "start_time": e.start_time.isoformat(),
+                    "end_time": e.end_time.isoformat(),
+                    "verification_status": _verification_status(e.election_id, g.user_id),
+                }
+                for e in elections
+            ],
+        })
+    return jsonify({"following": result})
+
+
+# ── Organisation Search for Voters ───────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/organisations", methods=["GET"])
+@require_jwt
+def search_organisations():
+    """Search verified organisations by name. Used by voters to find their org."""
+    from app.models.organization import Organization
+    query = (request.args.get("q") or "").strip()
+    orgs = Organization.query.filter_by(verified=True, deleted=False)
+    if query:
+        orgs = orgs.filter(Organization.name.ilike(f"%{query}%"))
+    orgs = orgs.order_by(Organization.name).limit(20).all()
+    return jsonify({
+        "organisations": [
+            {
+                "organization_id": o.organization_id,
+                "name": o.name,
+                "type": o.type,
+            }
+            for o in orgs
+        ]
+    })
+
+
+# ── Voter Elections List (by org) ─────────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/organisations/<org_id>/elections", methods=["GET"])
+@require_jwt
+def voter_list_elections_by_org(org_id):
+    """Return elections for a specific organisation grouped by status."""
+    _auto_transition_elections()
+    elections = (
+        Election.query
+        .filter(
+            Election.organization_id == org_id,
+            Election.status.in_(["scheduled", "active", "completed"])
+        )
+        .order_by(Election.start_time.asc())
+        .all()
+    )
+
+    upcoming, running, completed = [], [], []
+    for e in elections:
+        verif = _verification_status(e.election_id, g.user_id)
+        card = {
+            "election_id": e.election_id,
+            "title": e.title,
+            "description": e.description,
+            "election_type": e.election_type,
+            "visibility_type": e.visibility_type,
+            "start_time": e.start_time.isoformat(),
+            "end_time": e.end_time.isoformat(),
+            "status": e.status,
+            "results_published": e.results_published,
+            "verification_status": verif,
+        }
+        if e.status == "active":
+            running.append(card)
+        elif e.status == "scheduled":
+            upcoming.append(card)
+        else:
+            completed.append(card)
+
+    return jsonify({"upcoming": upcoming, "running": running, "completed": completed})
+
+
+# ── Voter Elections List (all — kept for backward compat) ────────────────────
 
 @voter_elections_bp.route("/api/voter/elections", methods=["GET"])
 @require_jwt
@@ -210,6 +347,11 @@ def verify_eligibility(election_id):
                 matched = True
                 break
 
+        # Delete any previous failed attempt so voter can retry with correct ID
+        VoterVerification.query.filter_by(
+            election_id=election_id, user_id=g.user_id, verified=False
+        ).delete()
+
         verified = matched
         vv = VoterVerification(
             user_id=g.user_id,
@@ -256,6 +398,11 @@ def verify_eligibility(election_id):
             or (voter_city and voter_city in districts)
             or (voter_city and voter_city in wards)
         )
+
+        # Delete any previous failed attempt so voter can retry with correct details
+        VoterVerification.query.filter_by(
+            election_id=election_id, user_id=g.user_id, verified=False
+        ).delete()
 
         verified = matched
         vv = VoterVerification(
@@ -316,6 +463,42 @@ def get_merkle_proof(election_id):
     })
 
 
+# ── My Vote History ────────────────────────────────────────────────────────────
+
+@voter_elections_bp.route("/api/voter/my-votes", methods=["GET"])
+@require_jwt
+def my_vote_history():
+    """Return all elections the logged-in voter has voted in, with tx hashes."""
+    from app.models.organization import Organization
+
+    txs = (
+        VoteTransaction.query
+        .filter_by(voter_id=g.user_id)
+        .order_by(VoteTransaction.timestamp.desc())
+        .all()
+    )
+
+    history = []
+    for tx in txs:
+        e = tx.election
+        org_name = None
+        if e and e.organization_id:
+            org = Organization.query.get(e.organization_id)
+            org_name = org.name if org else None
+        history.append({
+            "election_id": tx.election_id,
+            "election_title": e.title if e else "Unknown Election",
+            "election_status": e.status if e else None,
+            "org_name": org_name,
+            "contract_address": e.contract_address if e else None,
+            "blockchain_tx_hash": tx.blockchain_tx_hash,
+            "wallet_address": tx.wallet_address,
+            "voted_at": tx.timestamp.isoformat(),
+        })
+
+    return jsonify({"votes": history, "total": len(history)})
+
+
 # ── Election Results ────────────────────────────────────────────────────────────
 
 @voter_elections_bp.route("/api/voter/elections/<election_id>/results", methods=["GET"])
@@ -333,8 +516,12 @@ def get_election_results(election_id):
     """
     election = Election.query.get_or_404(election_id)
 
-    if not election.results_published and election.status != "completed":
+    if election.status not in ("active", "completed"):
         return jsonify({"message": "Results are not yet available"}), 400
+    if election.status == "completed" and not election.results_published:
+        return jsonify({"message": "Results are not yet available"}), 400
+
+    is_live = election.status == "active"
 
     # Build candidate map from DB
     constituencies = election.constituencies.all()
@@ -380,6 +567,7 @@ def get_election_results(election_id):
         "election_id": election.election_id,
         "title": election.title,
         "status": election.status,
+        "is_live": is_live,
         "contract_address": election.contract_address,
         "candidates": candidates_db,
         "transactions": [

@@ -18,7 +18,10 @@ export default function Navbar() {
 
       <div className="flex items-center gap-4">
         {user && !isAdmin && (
-          <Link to="/" className="text-sm hover:text-indigo-400">Elections</Link>
+          <>
+            <Link to="/" className="text-sm hover:text-indigo-400">Elections</Link>
+            <Link to="/my-votes" className="text-sm hover:text-indigo-400">My Votes</Link>
+          </>
         )}
         {isAdmin && (
           <Link to="/admin/elections" className="text-sm hover:text-indigo-400">Dashboard</Link>

@@ -49,14 +49,15 @@ from eth_account import Account
 from web3 import Web3
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-BACKEND_URL = "http://127.0.0.1:5001"
-RPC_URL     = "http://127.0.0.1:8545"
+BACKEND_URL  = "http://127.0.0.1:5001"
+RPC_URL      = "http://127.0.0.1:8545"
 
 # Hardhat Account #0 — used to fund voter wallets with gas ETH
-FUNDER_KEY  = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-FUND_AMOUNT = Web3.to_wei(0.05, "ether")   # 0.05 ETH per voter (covers gas easily)
+FUNDER_KEY   = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+FUND_AMOUNT  = Web3.to_wei(0.05, "ether")   # 0.05 ETH per voter (covers gas easily)
 
 SIM_PASSWORD = "Sim_Pass_123!"
+SIM_KEY      = os.environ.get("SIM_KEY", "sim-dev-123")
 
 # castVote(uint256,bytes32[]) — first 4 bytes of keccak256
 _SELECTOR = Web3.keccak(text="castVote(uint256,bytes32[])")[:4]
@@ -100,10 +101,12 @@ class VoterSimulator:
 
     # ── Backend API wrappers ──────────────────────────────────────────────────
 
-    def _api(self, method: str, path: str, token: str = None, **kwargs):
+    def _api(self, method: str, path: str, token: str = None, sim: bool = False, **kwargs):
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if sim:
+            headers["X-Sim-Key"] = SIM_KEY
         resp = getattr(requests, method)(
             f"{BACKEND_URL}{path}", headers=headers, timeout=20, **kwargs
         )
@@ -112,14 +115,15 @@ class VoterSimulator:
     def _get_admin_token(self) -> str:
         if self._admin_token:
             return self._admin_token
-        admin_email = os.environ.get("ADMIN_EMAIL", "admin@evoting.com")
-        admin_pass  = os.environ.get("ADMIN_PASSWORD", "admin123")
-        login = requests.post(f"{BACKEND_URL}/api/auth/admin/login",
-                              json={"email": admin_email, "password": admin_pass},
-                              timeout=10)
+        admin_email = os.environ.get("ADMIN_EMAIL", "")
+        admin_pass  = os.environ.get("ADMIN_PASSWORD", "")
+        if not admin_email or not admin_pass:
+            print("\nERROR: Set ADMIN_EMAIL and ADMIN_PASSWORD env vars.")
+            sys.exit(1)
+        login = self._api("post", "/api/auth/login", sim=True,
+                          json={"email": admin_email, "password": admin_pass})
         if login.status_code != 200:
             print(f"\nERROR: Admin login failed ({login.text[:100]})")
-            print("Set ADMIN_EMAIL / ADMIN_PASSWORD env vars.")
             sys.exit(1)
         self._admin_token = login.json()["token"]
         return self._admin_token
@@ -143,16 +147,13 @@ class VoterSimulator:
         """Create a test voter account, return (jwt_token, user_id)."""
         ts    = int(time.time() * 1000) % 1_000_000
         email = f"simvoter_{self.election_id[:8]}_{idx}_{ts}@test.sim"
-        resp  = self._api("post", "/api/auth/register", json={
+        resp  = self._api("post", "/api/auth/register", sim=True, json={
             "full_name": f"Sim Voter {idx}",
             "email":     email,
             "password":  SIM_PASSWORD,
         })
-        if resp.status_code == 409:
-            resp = self._api("post", "/api/auth/login",
-                             json={"email": email, "password": SIM_PASSWORD})
         if resp.status_code not in (200, 201):
-            raise RuntimeError(f"register/login failed: {resp.text[:120]}")
+            raise RuntimeError(f"register failed: {resp.text[:120]}")
         d = resp.json()
         return d["token"], d["user"]["user_id"]
 
@@ -375,14 +376,17 @@ def cmd_list():
         print("ERROR: Could not reach backend. Is Flask running?")
         sys.exit(1)
 
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@evoting.com")
-    admin_pass  = os.environ.get("ADMIN_PASSWORD", "admin123")
-    login = requests.post(f"{BACKEND_URL}/api/auth/admin/login",
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    admin_pass  = os.environ.get("ADMIN_PASSWORD", "")
+    if not admin_email or not admin_pass:
+        print("ERROR: Set ADMIN_EMAIL and ADMIN_PASSWORD env vars.")
+        sys.exit(1)
+    login = requests.post(f"{BACKEND_URL}/api/auth/login",
                           json={"email": admin_email, "password": admin_pass},
+                          headers={"Content-Type": "application/json", "X-Sim-Key": SIM_KEY},
                           timeout=10)
     if login.status_code != 200:
         print(f"ERROR: Admin login failed ({login.text[:100]})")
-        print("Set ADMIN_EMAIL / ADMIN_PASSWORD env vars to match your admin account.")
         sys.exit(1)
 
     token = login.json()["token"]

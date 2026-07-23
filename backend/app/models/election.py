@@ -30,6 +30,9 @@ class Election(db.Model):
     contract_address = db.Column(db.String(42))
     contract_deployed_at = db.Column(db.DateTime)
 
+    # Organisation this election belongs to
+    organization_id = db.Column(db.String(36), db.ForeignKey("organizations.organization_id"), nullable=True)
+
     # Admin who created this election
     created_by_admin = db.Column(db.String(36), db.ForeignKey("users.user_id"), nullable=False)
 

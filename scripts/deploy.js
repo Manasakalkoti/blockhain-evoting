@@ -1,9 +1,8 @@
 /**
  * Hardhat deployment script for EVoting contract.
  *
- * Usage:
- *   npx hardhat run scripts/deploy.js --network hardhat   # local dev
- *   npx hardhat run scripts/deploy.js --network sepolia   # testnet demo
+ * 
+ * 
  *
  * In production, this is called programmatically from the Python backend
  * via the deployElection RQ job using web3.py. This script is for manual

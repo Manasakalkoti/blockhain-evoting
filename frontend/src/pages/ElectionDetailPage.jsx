@@ -135,7 +135,7 @@ function PublicVerification({ electionId, election, user, onVerified }) {
       })
       onVerified()
     } catch (err) {
-      setError(err.response?.data?.message || 'Not eligible for this election')
+      setError('The details entered are not eligible for voting in this election. Please enter correct details.')
     } finally {
       setLoading(false)
     }
@@ -334,7 +334,7 @@ export default function ElectionDetailPage() {
   const isCompleted = election.status === 'completed'
   const isVerified = election.verification_status === 'verified'
   const isNotEligible = election.verification_status === 'not_eligible'
-  const canVerify = (isActive || isScheduled) && !isVerified && !isNotEligible
+  const canVerify = (isActive || isScheduled) && !isVerified
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -379,7 +379,9 @@ export default function ElectionDetailPage() {
           {isNotEligible && (
             <div className="mt-5 pt-5 border-t border-gray-100">
               <p className="text-sm text-red-600 font-medium">
-                ✗ You are not eligible for this election
+                {election.visibility_type === 'public'
+                  ? '✗ The details entered are not eligible for voting in this election. Please enter correct details.'
+                  : '✗ Wrong ID entered — please try again with the correct voter ID'}
               </p>
             </div>
           )}
@@ -391,6 +393,16 @@ export default function ElectionDetailPage() {
                 initialWallet={linkedWallet}
                 onLinked={(addr) => setLinkedWallet(addr)}
               />
+            </div>
+          )}
+
+          {/* Eligibility pre-check banner for upcoming elections */}
+          {isScheduled && !isVerified && !isNotEligible && (
+            <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+              <p className="text-sm font-semibold text-blue-800">Pre-check your eligibility now</p>
+              <p className="text-xs text-blue-700 mt-0.5">
+                This election hasn't started yet. Verify your eligibility early so you're ready to vote the moment it opens.
+              </p>
             </div>
           )}
 

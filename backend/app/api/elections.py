@@ -134,6 +134,10 @@ def create_election():
     if end_time <= start_time:
         return jsonify({"message": "end_time must be after start_time"}), 400
 
+    from app.models.user import User
+    creator = User.query.get(g.user_id)
+    org_id = creator.organization_id if creator else None
+
     election = Election(
         title=title,
         description=description,
@@ -142,6 +146,7 @@ def create_election():
         start_time=start_time,
         end_time=end_time,
         created_by_admin=g.user_id,
+        organization_id=org_id,
         status="draft",
     )
     db.session.add(election)
@@ -363,6 +368,10 @@ def end_election_route(election_id):
     election = Election.query.get_or_404(election_id)
     if election.status not in ("active", "scheduled"):
         return jsonify({"message": "Election must be active or scheduled to end"}), 400
+
+    # Deployed elections end automatically at end_time — admin cannot force-end them
+    if election.contract_address:
+        return jsonify({"message": "This election is running on the blockchain. It will end automatically at its scheduled time."}), 403
 
     # Run directly — RQ worker crashes on macOS (signal 6/SIGABRT)
     try:

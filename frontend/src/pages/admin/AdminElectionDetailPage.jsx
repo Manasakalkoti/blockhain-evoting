@@ -664,7 +664,14 @@ export default function AdminElectionDetailPage() {
   }
 
   async function handleEnd() {
-    if (!confirm('End this election? Voters will no longer be able to cast votes.')) return
+    const endTime = election?.end_time ? new Date(election.end_time) : null
+    const now = new Date()
+    if (endTime && endTime > now) {
+      const diff = Math.ceil((endTime - now) / 60000)
+      if (!confirm(`The election end time has not been reached yet (${diff} minutes remaining).\n\nEnd it early anyway?`)) return
+    } else {
+      if (!confirm('End this election? Voters will no longer be able to cast votes.')) return
+    }
     try {
       const { data } = await api.post(`/api/elections/${id}/end`)
       if (data.job_id) {
@@ -730,7 +737,7 @@ export default function AdminElectionDetailPage() {
                   {isLocking ? 'Locking…' : 'Lock Election'}
                 </button>
               )}
-              {(isActive || isScheduled) && (
+              {(isActive || isScheduled) && !election.contract_address && (
                 <button
                   onClick={handleEnd}
                   disabled={isEnding}
