@@ -14,7 +14,10 @@ class EmailOtp(db.Model):
     purpose = db.Column(db.String(50), nullable=False)  # login | org_register | voter_register
     expires_at = db.Column(db.DateTime, nullable=False)
     used = db.Column(db.Boolean, default=False, nullable=False)
+    failed_attempts = db.Column(db.Integer, default=0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    MAX_ATTEMPTS = 5
 
     @staticmethod
     def generate():
@@ -38,12 +41,23 @@ class EmailOtp(db.Model):
         db.session.commit()
         return otp
 
+    @property
+    def is_locked(self) -> bool:
+        return self.failed_attempts >= self.MAX_ATTEMPTS
+
     def verify(self, otp: str) -> bool:
         if self.used:
             return False
         if datetime.utcnow() > self.expires_at:
             return False
-        return self.otp_hash == self.hash_otp(otp)
+        if self.is_locked:
+            return False
+        if self.otp_hash == self.hash_otp(otp):
+            return True
+        # Wrong OTP — increment counter and save
+        self.failed_attempts += 1
+        db.session.commit()
+        return False
 
     def consume(self):
         self.used = True

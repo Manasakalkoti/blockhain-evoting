@@ -488,22 +488,369 @@ function AddCandidateForm({ electionId, constituencies, onAdded }) {
   )
 }
 
-// ── Constituency Manager (public elections) ───────────────────────────────────
+// ── Add Candidate Inline (per-constituency, no dropdown) ─────────────────────
+
+function AddCandidateInline({ electionId, constituencyId, onAdded }) {
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({
+    candidate_name: '', party_name: '', symbol_url: '', manifesto: '', candidate_identifier: '',
+  })
+  const [loading, setLoading] = useState(false)
+
+  function handleChange(e) {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.post(`/api/elections/${electionId}/candidates`, { ...form, constituency_id: constituencyId })
+      setForm({ candidate_name: '', party_name: '', symbol_url: '', manifesto: '', candidate_identifier: '' })
+      setOpen(false)
+      onAdded()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to add candidate')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-3 w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm text-gray-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors"
+      >
+        + Add Candidate
+      </button>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-3 border border-indigo-200 rounded-xl p-4 bg-indigo-50 space-y-3">
+      <h4 className="text-sm font-semibold text-indigo-800">New Candidate</h4>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-600 mb-1">Full Name *</label>
+          <input name="candidate_name" value={form.candidate_name} onChange={handleChange} required
+            placeholder="e.g. Arjun Sharma"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Party Name</label>
+          <input name="party_name" value={form.party_name} onChange={handleChange}
+            placeholder="e.g. Progressive Party"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Symbol</label>
+          <input name="symbol_url" value={form.symbol_url} onChange={handleChange}
+            placeholder="e.g. 🌹 or Lotus"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-600 mb-1">Manifesto</label>
+          <textarea name="manifesto" value={form.manifesto} onChange={handleChange} rows={2}
+            placeholder="Candidate's goals and vision…"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-600 mb-1">Candidate ID <span className="text-gray-400">(optional)</span></label>
+          <input name="candidate_identifier" value={form.candidate_identifier} onChange={handleChange}
+            placeholder="e.g. EMP-2024-001"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+      </div>
+      <div className="flex gap-2 pt-1">
+        <button type="button" onClick={() => setOpen(false)}
+          className="flex-1 border border-gray-300 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50">
+          Cancel
+        </button>
+        <button type="submit" disabled={loading}
+          className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+          {loading ? 'Adding…' : 'Add Candidate'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+// ── Constituency Card ─────────────────────────────────────────────────────────
+
+function ConstituencyCard({ c, candidates, election, isDraft, isPublic, onUpdate }) {
+  const rules = c.location_rules || {}
+  const [districts, setDistricts] = useState((rules.districts || []).join(', '))
+  const [wards, setWards] = useState((rules.wards || []).join(', '))
+  const [pincodes, setPincodes] = useState((rules.pincodes || []).join(', '))
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [msg, setMsg] = useState('')
+  const hasRules = !!c.location_rules
+
+  function splitCSV(str) {
+    return str.split(',').map(s => s.trim()).filter(Boolean)
+  }
+
+  async function handleSaveRules() {
+    setSaving(true)
+    setMsg('')
+    try {
+      await api.put(
+        `/api/elections/${election.election_id}/constituencies/${c.constituency_id}/location-rules`,
+        { districts: splitCSV(districts), wards: splitCSV(wards), pincodes: splitCSV(pincodes) }
+      )
+      setMsg('Location rules saved.')
+      onUpdate()
+    } catch (err) {
+      setMsg(err.response?.data?.message || 'Failed to save rules')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDeleteConstituency() {
+    if (!confirm(`Delete constituency "${c.constituency_name}"? All its candidates will also be removed.`)) return
+    setDeleting(true)
+    try {
+      await api.delete(`/api/elections/${election.election_id}/constituencies/${c.constituency_id}`)
+      onUpdate()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to delete constituency')
+      setDeleting(false)
+    }
+  }
+
+  async function handleDeleteCandidate(candidateId) {
+    if (!confirm('Remove this candidate?')) return
+    try {
+      await api.delete(`/api/elections/${election.election_id}/candidates/${candidateId}`)
+      onUpdate()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to remove candidate')
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 flex-shrink-0" />
+          <h3 className="font-semibold text-gray-800">{c.constituency_name}</h3>
+          {c.constituency_code && (
+            <span className="text-xs font-mono bg-gray-100 text-gray-500 px-2 py-0.5 rounded">{c.constituency_code}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {isPublic && hasRules && <Badge label="Rules Set" color="green" />}
+          {isPublic && !hasRules && isDraft && <Badge label="Rules Needed" color="yellow" />}
+          <span className="text-xs text-gray-400">{candidates.length} candidate{candidates.length !== 1 ? 's' : ''}</span>
+          {isDraft && (
+            <button
+              onClick={handleDeleteConstituency}
+              disabled={deleting}
+              className="text-red-400 hover:text-red-600 text-xs font-medium disabled:opacity-50 ml-1"
+            >
+              {deleting ? '…' : 'Delete'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Location rules — public elections only */}
+      {isPublic && (
+        <div className="mb-5 p-4 bg-gray-50 rounded-xl border border-gray-100">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Location Rules</p>
+          {!isDraft && hasRules ? (
+            <div className="space-y-2 text-sm">
+              {rules.districts?.length > 0 && (
+                <div>
+                  <span className="text-xs text-gray-400">Districts: </span>
+                  {rules.districts.map(d => (
+                    <span key={d} className="inline-block bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs mr-1">{d}</span>
+                  ))}
+                </div>
+              )}
+              {rules.wards?.length > 0 && (
+                <div>
+                  <span className="text-xs text-gray-400">Wards: </span>
+                  {rules.wards.map(w => (
+                    <span key={w} className="inline-block bg-green-50 text-green-700 px-2 py-0.5 rounded-full text-xs mr-1">{w}</span>
+                  ))}
+                </div>
+              )}
+              {rules.pincodes?.length > 0 && (
+                <div>
+                  <span className="text-xs text-gray-400">Pincodes: </span>
+                  {rules.pincodes.map(p => (
+                    <span key={p} className="inline-block bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full text-xs mr-1">{p}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : isDraft ? (
+            <div className="space-y-2">
+              <input value={districts} onChange={e => setDistricts(e.target.value)}
+                placeholder="Districts (comma-separated, e.g. Bangalore Urban)"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <input value={wards} onChange={e => setWards(e.target.value)}
+                placeholder="Wards (comma-separated, e.g. Ward 24)"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <input value={pincodes} onChange={e => setPincodes(e.target.value)}
+                placeholder="Pincodes (comma-separated, e.g. 560001)"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <button onClick={handleSaveRules} disabled={saving}
+                className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save Location Rules'}
+              </button>
+              {msg && <p className={`text-xs mt-1 ${msg.includes('ailed') ? 'text-red-600' : 'text-green-600'}`}>{msg}</p>}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">No location rules configured.</p>
+          )}
+        </div>
+      )}
+
+      {/* Candidates */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Candidates</p>
+        {candidates.length === 0 ? (
+          <p className="text-sm text-gray-400 mb-2">No candidates yet.</p>
+        ) : (
+          <div className="space-y-2 mb-2">
+            {candidates.map(cand => (
+              <CandidateCard
+                key={cand.candidate_id}
+                candidate={cand}
+                isDraft={isDraft}
+                onDelete={handleDeleteCandidate}
+              />
+            ))}
+          </div>
+        )}
+        {isDraft && (
+          <AddCandidateInline
+            electionId={election.election_id}
+            constituencyId={c.constituency_id}
+            onAdded={onUpdate}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Edit Timing Section ───────────────────────────────────────────────────────
+
+function toLocalDatetimeValue(isoStr) {
+  const d = new Date(isoStr)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function EditTimingSection({ election, onUpdate }) {
+  const [startTime, setStartTime] = useState(() => toLocalDatetimeValue(election.start_time))
+  const [endTime, setEndTime] = useState(() => toLocalDatetimeValue(election.end_time))
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  // Re-sync form when parent reloads election after a save
+  useEffect(() => {
+    setStartTime(toLocalDatetimeValue(election.start_time))
+    setEndTime(toLocalDatetimeValue(election.end_time))
+  }, [election.start_time, election.end_time])
+
+  async function handleSave() {
+    if (!startTime || !endTime) { setMsg('Both dates are required'); return }
+    if (new Date(endTime) <= new Date(startTime)) { setMsg('End must be after start'); return }
+    setSaving(true)
+    setMsg('')
+    try {
+      // Send the datetime-local value as-is (no toISOString) so the backend
+      // receives a naive local-time string, matching how election creation works.
+      await api.put(`/api/elections/${election.election_id}`, {
+        start_time: startTime,
+        end_time:   endTime,
+      })
+      setMsg('Timing updated.')
+      onUpdate()
+    } catch (err) {
+      setMsg(err.response?.data?.message || 'Failed to update timing')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Edit Timing</p>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Start</label>
+          <input
+            type="datetime-local"
+            value={startTime}
+            onChange={e => setStartTime(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">End</label>
+          <input
+            type="datetime-local"
+            value={endTime}
+            onChange={e => setEndTime(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      </div>
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+      >
+        {saving ? 'Saving…' : 'Update Timing'}
+      </button>
+      {msg && (
+        <p className={`text-xs mt-2 ${msg.includes('ailed') || msg.includes('required') || msg.includes('after') ? 'text-red-600' : 'text-green-600'}`}>
+          {msg}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Constituency Manager ──────────────────────────────────────────────────────
 
 function ConstituencyManager({ election, onUpdate }) {
   const isDraft = election.status === 'draft'
+  const isPublic = election.visibility_type === 'public'
   const [newName, setNewName] = useState('')
+  const [newCode, setNewCode] = useState('')
   const [adding, setAdding] = useState(false)
+  const [locking, setLocking] = useState(false)
+  const [lockMsg, setLockMsg] = useState('')
+
+  // Group candidates by constituency
+  const candidatesByConstituency = {}
+  for (const cand of (election.candidates || [])) {
+    const cid = cand.constituency_id
+    if (!candidatesByConstituency[cid]) candidatesByConstituency[cid] = []
+    candidatesByConstituency[cid].push(cand)
+  }
 
   async function handleAdd(e) {
     e.preventDefault()
-    if (!newName.trim()) return
+    if (!newName.trim() || !newCode.trim()) return
     setAdding(true)
     try {
       await api.post(`/api/elections/${election.election_id}/constituencies`, {
         constituency_name: newName.trim(),
+        constituency_code: newCode.trim().toUpperCase(),
       })
       setNewName('')
+      setNewCode('')
       onUpdate()
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to add constituency')
@@ -512,39 +859,98 @@ function ConstituencyManager({ election, onUpdate }) {
     }
   }
 
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-      <h2 className="font-semibold text-gray-700 mb-1">Constituencies</h2>
-      <p className="text-sm text-gray-400 mb-4">
-        Each constituency represents a ward, region, or electoral area within this election.
-      </p>
+  async function handleLock() {
+    if (!confirm('Lock eligibility? Location rules cannot be changed after this.')) return
+    setLocking(true)
+    setLockMsg('')
+    try {
+      await api.post(`/api/elections/${election.election_id}/geo-eligibility/lock`)
+      setLockMsg('Eligibility locked successfully.')
+      onUpdate()
+    } catch (err) {
+      setLockMsg(err.response?.data?.message || 'Failed to lock eligibility')
+    } finally {
+      setLocking(false)
+    }
+  }
 
-      <div className="space-y-2 mb-4">
-        {(election.constituencies || []).map(c => (
-          <div key={c.constituency_id} className="flex items-center gap-2 py-1.5 border-b border-gray-50 last:border-0">
-            <span className="w-2 h-2 rounded-full bg-indigo-400 flex-shrink-0" />
-            <span className="text-sm text-gray-800">{c.constituency_name}</span>
-          </div>
-        ))}
+  const constituencies = election.constituencies || []
+  const allRulesSet = isPublic && constituencies.length > 0 &&
+    constituencies.every(c => !!c.location_rules)
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="font-semibold text-gray-700">Constituencies</h2>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Configure each constituency's location rules and candidates.
+          </p>
+        </div>
+        {isPublic && election.eligibility_locked && <Badge label="Eligibility Locked" color="green" />}
       </div>
 
-      {isDraft && (
-        <form onSubmit={handleAdd} className="flex gap-2">
-          <input
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            placeholder="New constituency name (e.g. Ward 24)"
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <button
-            type="submit"
-            disabled={adding || !newName.trim()}
-            className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {adding ? '…' : 'Add'}
-          </button>
-        </form>
+      {constituencies.length === 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4 text-center">
+          <p className="text-sm text-gray-400">No constituencies yet. Add one below.</p>
+        </div>
       )}
+
+      {constituencies.map(c => (
+        <ConstituencyCard
+          key={c.constituency_id}
+          c={c}
+          candidates={candidatesByConstituency[c.constituency_id] || []}
+          election={election}
+          isDraft={isDraft}
+          isPublic={isPublic}
+          onUpdate={onUpdate}
+        />
+      ))}
+
+      {/* Add constituency form */}
+      {isDraft && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Add Constituency</p>
+          <form onSubmit={handleAdd} className="flex flex-col gap-2">
+            <div className="flex gap-2">
+              <input
+                value={newCode}
+                onChange={e => setNewCode(e.target.value)}
+                placeholder="Code (e.g. BLR-NORTH)"
+                required
+                className="w-36 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <input
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                placeholder="Constituency name (e.g. Bangalore North)"
+                required
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button type="submit" disabled={adding || !newName.trim() || !newCode.trim()}
+                className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap">
+                {adding ? '…' : '+ Add'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Lock eligibility button (public elections only, all rules set, not yet locked) */}
+      {isPublic && isDraft && allRulesSet && !election.eligibility_locked && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-green-800">All constituencies have location rules</p>
+            <p className="text-xs text-green-700 mt-0.5">Lock eligibility once you've confirmed all rules are correct.</p>
+          </div>
+          <button onClick={handleLock} disabled={locking}
+            className="border border-green-600 text-green-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-100 disabled:opacity-50 flex-shrink-0 ml-4">
+            {locking ? 'Locking…' : 'Lock Eligibility'}
+          </button>
+        </div>
+      )}
+      {lockMsg && <p className={`text-sm mt-2 ${lockMsg.includes('ailed') ? 'text-red-600' : 'text-green-600'}`}>{lockMsg}</p>}
     </div>
   )
 }
@@ -776,6 +1182,11 @@ export default function AdminElectionDetailPage() {
               <dt className="text-gray-400">End</dt>
               <dd className="text-gray-800">{new Date(election.end_time).toLocaleString()}</dd>
             </div>
+            {isDraft && (
+              <div className="col-span-2 pt-3 border-t border-gray-100 mt-1">
+                <EditTimingSection election={election} onUpdate={reload} />
+              </div>
+            )}
             {election.eligibility_merkle_root && (
               <div className="col-span-2">
                 <dt className="text-gray-400">Merkle root</dt>
@@ -821,50 +1232,45 @@ export default function AdminElectionDetailPage() {
           </div>
         </div>
 
-        {/* ── Geographic Eligibility (public elections) ── */}
-        {isPublic && (
-          <GeoEligibilitySection election={election} onUpdate={reload} />
-        )}
+        {/* ── Constituencies + Candidates (always shown) ── */}
+        <ConstituencyManager election={election} onUpdate={reload} />
 
-        {/* ── Constituency Management (public elections) ── */}
-        {isPublic && (
-          <ConstituencyManager election={election} onUpdate={reload} />
-        )}
+        {/* ── Candidates (private elections only — public uses per-constituency cards) ── */}
+        {!isPublic && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <h2 className="font-semibold text-gray-700 mb-4">
+              Candidates
+              {election.candidates?.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-gray-400">
+                  ({election.candidates.length})
+                </span>
+              )}
+            </h2>
 
-        {/* ── Candidates ── */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <h2 className="font-semibold text-gray-700 mb-4">
-            Candidates
-            {election.candidates?.length > 0 && (
-              <span className="ml-2 text-sm font-normal text-gray-400">
-                ({election.candidates.length})
-              </span>
+            {(election.candidates || []).length === 0 ? (
+              <p className="text-sm text-gray-400 mb-4">No candidates added yet.</p>
+            ) : (
+              <div className="space-y-3 mb-4">
+                {election.candidates.map((c) => (
+                  <CandidateCard
+                    key={c.candidate_id}
+                    candidate={c}
+                    isDraft={isDraft}
+                    onDelete={handleDeleteCandidate}
+                  />
+                ))}
+              </div>
             )}
-          </h2>
 
-          {(election.candidates || []).length === 0 ? (
-            <p className="text-sm text-gray-400 mb-4">No candidates added yet.</p>
-          ) : (
-            <div className="space-y-3 mb-4">
-              {election.candidates.map((c) => (
-                <CandidateCard
-                  key={c.candidate_id}
-                  candidate={c}
-                  isDraft={isDraft}
-                  onDelete={handleDeleteCandidate}
-                />
-              ))}
-            </div>
-          )}
-
-          {isDraft && (
-            <AddCandidateForm
-              electionId={id}
-              constituencies={election.constituencies || []}
-              onAdded={reload}
-            />
-          )}
-        </div>
+            {isDraft && (
+              <AddCandidateForm
+                electionId={id}
+                constituencies={election.constituencies || []}
+                onAdded={reload}
+              />
+            )}
+          </div>
+        )}
 
         {/* ── CSV Upload (private + draft only) ── */}
         {!isPublic && isDraft && (

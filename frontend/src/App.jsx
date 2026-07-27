@@ -50,7 +50,6 @@ export default function App() {
       {/* Super Admin (Organisation owner) */}
       <Route path="/org/dashboard" element={<ProtectedRoute role="super_admin"><SuperAdminDashboardPage /></ProtectedRoute>} />
 
-      {/* Fallback — no RC route */}
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   )

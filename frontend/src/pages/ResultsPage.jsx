@@ -5,6 +5,79 @@ import api from '../api/client'
 
 const POLL_INTERVAL = 10000 // 10 seconds while live
 
+// ── Per-constituency tally block ──────────────────────────────────────────────
+
+function ConstituencyTally({ group, isLive }) {
+  const { constituency_name, candidates, total_votes } = group
+  const maxVotes = Math.max(...candidates.map((c) => c.votes), 1)
+
+  const winner = !isLive && total_votes > 0
+    ? candidates.reduce((a, b) => (a.votes > b.votes ? a : b), candidates[0])
+    : null
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4">
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+          {constituency_name}
+        </h2>
+        <span className="text-xs text-gray-400">
+          {total_votes.toLocaleString()} vote{total_votes !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      <div className="space-y-5">
+        {candidates.map((c) => {
+          const pct = total_votes > 0 ? ((c.votes / total_votes) * 100).toFixed(1) : '0.0'
+          const isWinner = winner && c.candidate_id === winner.candidate_id
+
+          return (
+            <div key={c.candidate_id}>
+              <div className="flex justify-between items-center mb-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {c.symbol_url && (
+                    <span className="text-base">{c.symbol_url}</span>
+                  )}
+                  <span className={`font-semibold text-sm ${isWinner ? 'text-indigo-700' : 'text-gray-800'}`}>
+                    {c.candidate_name}
+                  </span>
+                  {isWinner && (
+                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                      Winner
+                    </span>
+                  )}
+                  {c.party_name && (
+                    <span className="text-xs text-gray-400">{c.party_name}</span>
+                  )}
+                </div>
+                <div className="text-right shrink-0 ml-2">
+                  <span className="text-sm font-semibold text-gray-700">{c.votes.toLocaleString()}</span>
+                  <span className="text-xs text-gray-400 ml-1">({pct}%)</span>
+                </div>
+              </div>
+              <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    isWinner ? 'bg-indigo-500' :
+                    isLive   ? 'bg-blue-400'   : 'bg-gray-300'
+                  }`}
+                  style={{ width: `${(c.votes / maxVotes) * 100}%` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {total_votes === 0 && !isLive && (
+        <p className="text-sm text-gray-400 text-center mt-4">No votes cast in this constituency.</p>
+      )}
+    </div>
+  )
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function ResultsPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -27,11 +100,8 @@ export default function ResultsPage() {
     }
   }
 
-  useEffect(() => {
-    fetchResults()
-  }, [id])
+  useEffect(() => { fetchResults() }, [id])
 
-  // Poll every 10 seconds when election is live
   useEffect(() => {
     if (results?.is_live) {
       intervalRef.current = setInterval(fetchResults, POLL_INTERVAL)
@@ -59,12 +129,10 @@ export default function ResultsPage() {
     </div>
   )
 
-  const candidates = results?.candidates || []
   const totalVotes = results?.total_votes ?? 0
-  const maxVotes = Math.max(...candidates.map((c) => c.votes), 1)
-  const winner = totalVotes > 0
-    ? candidates.reduce((a, b) => (a.votes > b.votes ? a : b), candidates[0])
-    : null
+  const isLive     = results?.is_live ?? false
+  const constituencies = results?.constituencies || []
+  const isMultiConstituency = constituencies.length > 1
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -76,10 +144,10 @@ export default function ResultsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">{results?.title}</h1>
             <p className="text-sm text-gray-500 mt-1">
-              {results?.is_live ? 'Live counting in progress' : 'Final results'}
+              {isLive ? 'Live counting in progress' : 'Final results'}
             </p>
           </div>
-          {results?.is_live && (
+          {isLive && (
             <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-xs font-semibold px-3 py-1.5 rounded-full">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
@@ -91,62 +159,32 @@ export default function ResultsPage() {
         </div>
 
         {/* Total votes */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-4 mb-4 flex items-center justify-between">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-4 mb-6 flex items-center justify-between">
           <div>
             <p className="text-3xl font-bold text-gray-800">{totalVotes.toLocaleString()}</p>
-            <p className="text-sm text-gray-500">Total votes cast</p>
+            <p className="text-sm text-gray-500">Total votes cast{isMultiConstituency ? ' across all constituencies' : ''}</p>
           </div>
-          {lastUpdated && results?.is_live && (
+          {lastUpdated && isLive && (
             <p className="text-xs text-gray-400">
               Updated {lastUpdated.toLocaleTimeString()} · refreshes every 10s
             </p>
           )}
         </div>
 
-        {/* Vote tally */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-5">
-            Vote Tally
-          </h2>
-          <div className="space-y-5">
-            {candidates.map((c) => {
-              const pct = totalVotes > 0 ? ((c.votes / totalVotes) * 100).toFixed(1) : '0.0'
-              const isWinner = winner && c.candidate_id === winner.candidate_id && !results?.is_live
-              return (
-                <div key={c.candidate_id}>
-                  <div className="flex justify-between items-center mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className={`font-semibold text-sm ${isWinner ? 'text-indigo-700' : 'text-gray-800'}`}>
-                        {c.candidate_name}
-                      </span>
-                      {isWinner && (
-                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
-                          Winner
-                        </span>
-                      )}
-                      {c.party_name && (
-                        <span className="text-xs text-gray-400">{c.party_name}</span>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <span className="text-sm font-semibold text-gray-700">{c.votes.toLocaleString()}</span>
-                      <span className="text-xs text-gray-400 ml-1">({pct}%)</span>
-                    </div>
-                  </div>
-                  <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${
-                        isWinner ? 'bg-indigo-500' :
-                        results?.is_live ? 'bg-blue-400' : 'bg-gray-300'
-                      }`}
-                      style={{ width: `${(c.votes / maxVotes) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
+        {/* Per-constituency tallies */}
+        {constituencies.length > 0 ? (
+          constituencies.map((group) => (
+            <ConstituencyTally key={group.constituency_id} group={group} isLive={isLive} />
+          ))
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4">
+            <p className="text-sm text-gray-400 text-center">No candidate data available.</p>
           </div>
-        </div>
+        )}
+
+        {totalVotes === 0 && !isLive && (
+          <p className="text-sm text-gray-400 text-center py-4">No votes were cast in this election.</p>
+        )}
 
         {/* Blockchain verification */}
         {results?.contract_address && (
@@ -218,10 +256,6 @@ export default function ResultsPage() {
               </table>
             </div>
           </div>
-        )}
-
-        {totalVotes === 0 && !results?.is_live && (
-          <p className="text-sm text-gray-400 text-center py-8">No votes were cast in this election.</p>
         )}
       </div>
     </div>

@@ -117,10 +117,10 @@ def get_following():
             Election.query
             .filter(
                 Election.organization_id == org.organization_id,
-                Election.status.in_(["scheduled", "active"])
+                Election.status.in_(["scheduled", "active", "completed"])
             )
-            .order_by(Election.start_time.asc())
-            .limit(3)
+            .order_by(Election.start_time.desc())
+            .limit(5)
             .all()
         )
         result.append({
@@ -261,15 +261,32 @@ def voter_get_election(election_id):
     if election.status == "draft":
         return jsonify({"message": "Election not available"}), 404
 
-    constituencies = election.constituencies.all()
+    constituencies_raw = election.constituencies.all()
     candidates = []
-    for c in constituencies:
-        for cand in (
+    constituencies_out = []
+    for c in constituencies_raw:
+        c_candidates = (
             c.candidates.filter_by(status="active")
             .order_by(Candidate.candidate_position)
             .all()
-        ):
-            candidates.append(_candidate_dict(cand))
+        )
+        cand_dicts = [_candidate_dict(cand) for cand in c_candidates]
+        candidates.extend(cand_dicts)
+
+        # Parse location_rules for this constituency
+        c_rules = None
+        if c.location_rules:
+            try:
+                c_rules = json.loads(c.location_rules)
+            except (ValueError, TypeError):
+                pass
+
+        constituencies_out.append({
+            "constituency_id": c.constituency_id,
+            "constituency_name": c.constituency_name,
+            "location_rules": c_rules,
+            "candidates": cand_dicts,
+        })
 
     location_rules = None
     if election.location_rules:
@@ -279,6 +296,18 @@ def voter_get_election(election_id):
             pass
 
     verif = _verification_status(election_id, g.user_id)
+
+    # For public elections: tell the voter which constituency they verified for
+    verified_constituency = None
+    if verif == "verified" and election.visibility_type == "public":
+        vv = VoterVerification.query.filter_by(
+            election_id=election_id, user_id=g.user_id, verified=True
+        ).first()
+        if vv and vv.constituency_id:
+            verified_constituency = {
+                "constituency_id": vv.constituency_id,
+                "constituency_name": vv.constituency.constituency_name if vv.constituency else None,
+            }
 
     return jsonify({
         "election": {
@@ -295,7 +324,9 @@ def voter_get_election(election_id):
             "location_rules": location_rules,
             "contract_address": election.contract_address,
             "candidates": candidates,
+            "constituencies": constituencies_out,
             "verification_status": verif,
+            "verified_constituency": verified_constituency,
         }
     })
 
@@ -367,67 +398,104 @@ def verify_eligibility(election_id):
             return jsonify({"verified": True, "message": "You are eligible to vote in this election"})
         return jsonify({"verified": False, "message": "Your ID is not on the authorized voter list"}), 400
 
-    # ── Public election: address-based check (GEO_MOCK) ──────────────────────
+    # ── Public election: Aadhaar + address-based check (mock KYC) ───────────────
     else:
-        if not election.eligibility_locked or not election.location_rules:
+        import hashlib
+        import re as _re
+
+        if not election.eligibility_locked:
             return jsonify({"message": "Geographic eligibility rules have not been configured yet"}), 400
 
-        try:
-            rules = json.loads(election.location_rules)
-        except (ValueError, TypeError):
-            return jsonify({"message": "Invalid eligibility rules"}), 500
-
-        # Accept address credentials from the request body
         data = request.get_json(silent=True) or {}
-        submitted_city = (data.get("city") or "").strip()
+        aadhaar_number    = (data.get("aadhaar_number") or "").strip()
+        submitted_address = (data.get("address_line") or "").strip()
+        submitted_city    = (data.get("city") or "").strip()
+        submitted_state   = (data.get("state") or "").strip()
         submitted_pincode = (data.get("pincode") or "").strip()
 
-        if not submitted_city and not submitted_pincode:
-            return jsonify({"message": "Please provide at least your city or pincode for verification"}), 400
+        # All fields required
+        if not aadhaar_number:
+            return jsonify({"message": "Aadhaar number is required"}), 400
+        if not _re.match(r'^\d{12}$', aadhaar_number):
+            return jsonify({"message": "Invalid Aadhaar number. Must be exactly 12 digits."}), 400
+        if not submitted_address:
+            return jsonify({"message": "Address line is required"}), 400
+        if not submitted_city:
+            return jsonify({"message": "City / District is required"}), 400
+        if not submitted_state:
+            return jsonify({"message": "State is required"}), 400
+        if not submitted_pincode:
+            return jsonify({"message": "Pincode is required"}), 400
 
-        districts = [d.lower() for d in rules.get("districts", [])]
-        wards = [w.lower() for w in rules.get("wards", [])]
-        pincodes = rules.get("pincodes", [])
+        # Hash the Aadhaar — never store raw number
+        aadhaar_hash = hashlib.sha256(aadhaar_number.encode()).hexdigest()
 
-        voter_pincode = submitted_pincode
-        voter_city = submitted_city.lower()
+        # Check if this Aadhaar has already been verified for this election
+        aadhaar_used = VoterVerification.query.filter_by(
+            election_id=election_id,
+            aadhaar_hash=aadhaar_hash,
+            verified=True,
+        ).first()
+        if aadhaar_used:
+            return jsonify({
+                "message": "This Aadhaar number has already been used to verify for this election"
+            }), 403
 
-        # GEO_MOCK: simple text match against pincode and city/district
-        matched = (
-            (voter_pincode and voter_pincode in pincodes)
-            or (voter_city and voter_city in districts)
-            or (voter_city and voter_city in wards)
-        )
+        # Find which constituency's rules match the voter's submitted address
+        constituencies = election.constituencies.all()
+        matched_constituency = None
+        city_lower = submitted_city.lower()
 
-        # Delete any previous failed attempt so voter can retry with correct details
+        for c in constituencies:
+            if not c.location_rules:
+                continue
+            try:
+                rules = json.loads(c.location_rules)
+            except (ValueError, TypeError):
+                continue
+            c_districts = [d.lower() for d in rules.get("districts", [])]
+            c_wards     = [w.lower() for w in rules.get("wards", [])]
+            c_pincodes  = rules.get("pincodes", [])
+
+            if (
+                (submitted_pincode and submitted_pincode in c_pincodes)
+                or (city_lower and city_lower in c_districts)
+                or (city_lower and city_lower in c_wards)
+            ):
+                matched_constituency = c
+                break
+
+        # Delete any previous failed attempt so voter can retry
         VoterVerification.query.filter_by(
             election_id=election_id, user_id=g.user_id, verified=False
         ).delete()
 
-        verified = matched
+        if not matched_constituency:
+            db.session.commit()
+            return jsonify({
+                "verified": False,
+                "message": "Your address does not fall within any constituency's eligible area for this election",
+                "submitted_address": {"city": submitted_city, "pincode": submitted_pincode},
+            }), 400
+
         vv = VoterVerification(
             user_id=g.user_id,
             election_id=election_id,
+            constituency_id=matched_constituency.constituency_id,
             method="address_verification",
-            verified=verified,
-            verified_at=datetime.utcnow() if verified else None,
+            verified=True,
+            verified_at=datetime.utcnow(),
+            aadhaar_hash=aadhaar_hash,
         )
         db.session.add(vv)
         db.session.commit()
 
-        if verified:
-            return jsonify({
-                "verified": True,
-                "message": "Your address falls within the election's geographic boundary"
-            })
         return jsonify({
-            "verified": False,
-            "message": "Your address is not within the eligible geographic area for this election",
-            "submitted_address": {
-                "city": submitted_city,
-                "pincode": submitted_pincode,
-            }
-        }), 400
+            "verified": True,
+            "constituency_id": matched_constituency.constituency_id,
+            "constituency_name": matched_constituency.constituency_name,
+            "message": f"Verified! You belong to → {matched_constituency.constituency_name}",
+        })
 
 
 # ── Merkle Proof ───────────────────────────────────────────────────────────────
@@ -523,45 +591,67 @@ def get_election_results(election_id):
 
     is_live = election.status == "active"
 
-    # Build candidate map from DB
+    # Build candidate map keyed by candidate_position (globally unique within election)
     constituencies = election.constituencies.all()
-    candidates_db = []
-    candidate_map = {}  # candidate_position → candidate info
+    candidate_map = {}  # position_str → candidate info dict (includes constituency fields)
+    constituency_order = []  # preserve constituency ordering
+
     for c in constituencies:
+        cands_in_c = []
         for cand in c.candidates.filter_by(status="active").order_by(Candidate.candidate_position).all():
             info = {
                 "candidate_id": cand.candidate_id,
                 "candidate_name": cand.candidate_name,
                 "party_name": cand.party_name,
+                "symbol_url": cand.symbol_url,
                 "position": cand.candidate_position,
+                "constituency_id": c.constituency_id,
+                "constituency_name": c.constituency_name,
                 "votes": 0,
             }
-            candidates_db.append(info)
+            cands_in_c.append(info)
             candidate_map[str(cand.candidate_position)] = info
+        constituency_order.append({
+            "constituency_id": c.constituency_id,
+            "constituency_name": c.constituency_name,
+            "candidates": cands_in_c,
+        })
 
     # Fetch vote transactions for audit log
     transactions = VoteTransaction.query.filter_by(election_id=election_id).all()
 
     # Count votes from DB transactions (fallback always works)
     for tx in transactions:
-        cid = str(tx.candidate_id)
-        if cid in candidate_map:
-            candidate_map[cid]["votes"] += 1
+        pos = str(tx.candidate_id)
+        if pos in candidate_map:
+            candidate_map[pos]["votes"] += 1
 
     # Try to fetch on-chain results (more authoritative)
     blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
-    on_chain_counts = None
     if blockchain_enabled and election.contract_address:
         try:
             on_chain_counts = _fetch_on_chain_results(election.contract_address)
+            for position_str, count in on_chain_counts.items():
+                if position_str in candidate_map:
+                    candidate_map[position_str]["votes"] = count
         except Exception:
-            on_chain_counts = None  # fall back to DB counts silently
+            pass  # fall back to DB counts silently
 
-    # If on-chain data available, use it to override DB counts
-    if on_chain_counts:
-        for position_str, count in on_chain_counts.items():
-            if position_str in candidate_map:
-                candidate_map[position_str]["votes"] = count
+    # Build per-constituency result groups
+    result_constituencies = []
+    total_votes = 0
+    for group in constituency_order:
+        c_total = sum(cand["votes"] for cand in group["candidates"])
+        total_votes += c_total
+        result_constituencies.append({
+            "constituency_id": group["constituency_id"],
+            "constituency_name": group["constituency_name"],
+            "candidates": group["candidates"],
+            "total_votes": c_total,
+        })
+
+    # Flat candidate list for backward-compat
+    all_candidates = [info for group in constituency_order for info in group["candidates"]]
 
     return jsonify({
         "election_id": election.election_id,
@@ -569,7 +659,8 @@ def get_election_results(election_id):
         "status": election.status,
         "is_live": is_live,
         "contract_address": election.contract_address,
-        "candidates": candidates_db,
+        "constituencies": result_constituencies,
+        "candidates": all_candidates,
         "transactions": [
             {
                 "blockchain_tx_hash": tx.blockchain_tx_hash,
@@ -578,7 +669,7 @@ def get_election_results(election_id):
             }
             for tx in transactions
         ],
-        "total_votes": len(transactions),
+        "total_votes": total_votes,
     })
 
 

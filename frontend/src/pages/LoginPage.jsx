@@ -55,12 +55,11 @@ export default function LoginPage() {
 
         {/* Role info tiles */}
         {step === 'credentials' && (
-          <div className="grid grid-cols-2 gap-2 mb-6">
+          <div className="grid grid-cols-3 gap-2 mb-6">
             {[
               { label: 'Voter', desc: 'Cast your vote' },
               { label: 'Organisation', desc: 'Manage your org' },
               { label: 'Admin', desc: 'Run elections' },
-              { label: 'Result Committee', desc: 'Verify results' },
             ].map((r) => (
               <div key={r.label} className="border border-gray-100 rounded-lg p-2 bg-gray-50">
                 <p className="text-xs font-semibold text-gray-700">{r.label}</p>

@@ -24,7 +24,6 @@ def get_my_org():
 
     from app.models.voter_followed_org import VoterFollowedOrg
     admins = User.query.filter_by(organization_id=org.organization_id, role="admin").all()
-    rc_members = User.query.filter_by(organization_id=org.organization_id, role="result_committee").all()
     elections = Election.query.filter_by(organization_id=org.organization_id).order_by(Election.created_at.desc()).all()
 
     follows = VoterFollowedOrg.query.filter_by(organization_id=org.organization_id).all()
@@ -43,10 +42,6 @@ def get_my_org():
         "admins": [
             {"user_id": a.user_id, "full_name": a.full_name, "email": a.email, "status": a.status}
             for a in admins
-        ],
-        "rc_members": [
-            {"user_id": r.user_id, "full_name": r.full_name, "email": r.email, "status": r.status}
-            for r in rc_members
         ],
         "elections": [
             {
@@ -110,47 +105,6 @@ def create_admin():
     }), 201
 
 
-# ── Create RC Member ──────────────────────────────────────────────────────────
-
-@super_admin_bp.route("/api/org/rc-members", methods=["POST"])
-@require_super_admin
-def create_rc_member():
-    """Super Admin creates a Result Committee member under their organisation."""
-    user = User.query.get_or_404(g.user_id)
-    data = request.get_json(silent=True) or {}
-
-    full_name = (data.get("full_name") or "").strip()
-    email = (data.get("email") or "").strip().lower()
-    password = (data.get("password") or "").strip()
-
-    if not full_name or not email or not password:
-        return jsonify({"message": "full_name, email and password are required"}), 400
-    if len(password) < 6:
-        return jsonify({"message": "Password must be at least 6 characters"}), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify({"message": "Email already registered"}), 409
-
-    rc = User(
-        full_name=full_name,
-        email=email,
-        password_hash=_hash_password(password),
-        role="result_committee",
-        organization_id=user.organization_id,
-    )
-    db.session.add(rc)
-    db.session.commit()
-
-    return jsonify({
-        "message": "Result Committee member created successfully",
-        "rc_member": {
-            "user_id": rc.user_id,
-            "full_name": rc.full_name,
-            "email": rc.email,
-            "role": rc.role,
-        }
-    }), 201
-
-
 # ── Delete Organisation (soft delete) ────────────────────────────────────────
 
 @super_admin_bp.route("/api/org/me", methods=["DELETE"])
@@ -207,8 +161,8 @@ def remove_member(user_id):
 
     if member.organization_id != owner.organization_id:
         return jsonify({"message": "This member does not belong to your organisation"}), 403
-    if member.role not in ("admin", "result_committee"):
-        return jsonify({"message": "Can only remove admins or RC members"}), 400
+    if member.role != "admin":
+        return jsonify({"message": "Can only remove admins"}), 400
 
     db.session.delete(member)
     db.session.commit()

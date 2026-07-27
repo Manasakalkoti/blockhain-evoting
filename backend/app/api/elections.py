@@ -28,10 +28,18 @@ def _candidate_dict(c):
 
 
 def _constituency_dict(c):
+    location_rules = None
+    if c.location_rules:
+        try:
+            location_rules = json.loads(c.location_rules)
+        except (ValueError, TypeError):
+            location_rules = None
     return {
         "constituency_id": c.constituency_id,
+        "constituency_code": c.constituency_code,
         "constituency_name": c.constituency_name,
         "description": c.description,
+        "location_rules": location_rules,
     }
 
 
@@ -152,11 +160,10 @@ def create_election():
     db.session.add(election)
     db.session.flush()  # get election_id before commit
 
-    # Auto-create one default constituency (named "General" for private, title for public)
-    default_name = "General" if visibility_type == "private" else title
+    # Auto-create one default constituency
     constituency = Constituency(
         election_id=election.election_id,
-        constituency_name=default_name,
+        constituency_name="General",
         description="Default constituency",
     )
     db.session.add(constituency)
@@ -308,17 +315,74 @@ def add_constituency(election_id):
 
     data = request.get_json(silent=True) or {}
     name = (data.get("constituency_name") or "").strip()
+    code = (data.get("constituency_code") or "").strip().upper()
     if not name:
         return jsonify({"message": "constituency_name is required"}), 400
+    if not code:
+        return jsonify({"message": "constituency_code is required"}), 400
+
+    # Code must be unique within this election
+    existing = Constituency.query.filter_by(election_id=election_id, constituency_code=code).first()
+    if existing:
+        return jsonify({"message": f"Constituency code '{code}' already used in this election"}), 409
 
     c = Constituency(
         election_id=election_id,
+        constituency_code=code,
         constituency_name=name,
         description=(data.get("description") or "").strip() or None,
     )
     db.session.add(c)
     db.session.commit()
     return jsonify({"constituency": _constituency_dict(c)}), 201
+
+
+@elections_bp.route("/api/elections/<election_id>/constituencies/<constituency_id>", methods=["DELETE"])
+@require_admin
+def delete_constituency(election_id, constituency_id):
+    election = Election.query.get_or_404(election_id)
+    if election.status != "draft":
+        return jsonify({"message": "Only draft elections can be modified"}), 400
+    c = Constituency.query.filter_by(
+        constituency_id=constituency_id,
+        election_id=election_id,
+    ).first_or_404()
+    db.session.delete(c)
+    db.session.commit()
+    return jsonify({"message": f"Constituency '{c.constituency_name}' deleted"})
+
+
+@elections_bp.route("/api/elections/<election_id>/constituencies/<constituency_id>/location-rules", methods=["PUT"])
+@require_admin
+def save_constituency_location_rules(election_id, constituency_id):
+    """Save location rules for a specific constituency."""
+    election = Election.query.get_or_404(election_id)
+    if election.status != "draft":
+        return jsonify({"message": "Only draft elections can be configured"}), 400
+    if election.visibility_type != "public":
+        return jsonify({"message": "Only public elections support location rules"}), 400
+
+    c = Constituency.query.filter_by(
+        constituency_id=constituency_id,
+        election_id=election_id
+    ).first_or_404()
+
+    data = request.get_json(silent=True) or {}
+    districts = [d.strip() for d in data.get("districts", []) if str(d).strip()]
+    wards     = [w.strip() for w in data.get("wards", []) if str(w).strip()]
+    pincodes  = [p.strip() for p in data.get("pincodes", []) if str(p).strip()]
+
+    if not districts and not wards and not pincodes:
+        return jsonify({"message": "At least one district, ward, or pincode is required"}), 400
+
+    rules = {"districts": districts, "wards": wards, "pincodes": pincodes}
+    c.location_rules = json.dumps(rules)
+    db.session.commit()
+
+    return jsonify({
+        "constituency": _constituency_dict(c),
+        "message": f"Location rules saved for {c.constituency_name}",
+    })
 
 
 # ── Lock (triggers Merkle + contract deploy pipeline) ─────────────────────────
@@ -345,8 +409,12 @@ def lock_election(election_id):
         if total_voters == 0:
             return jsonify({"message": "Upload voter CSV before locking a private election"}), 400
 
-    if election.visibility_type == "public" and not election.location_rules:
-        return jsonify({"message": "Configure and lock geographic eligibility rules before locking a public election"}), 400
+    if election.visibility_type == "public":
+        missing = [c.constituency_name for c in constituencies if not c.location_rules]
+        if missing:
+            return jsonify({
+                "message": f"Configure location rules for all constituencies before locking: {', '.join(missing)}"
+            }), 400
 
     # Always run directly — RQ worker crashes on macOS (signal 6/SIGABRT)
     # due to fork() + web3.py interaction. Direct execution is safe and fast enough.
@@ -394,7 +462,16 @@ def redeploy_election(election_id):
     from app.jobs.merkle_jobs import lock_election_pipeline
     import os
 
+    # Hard block in any non-development environment
+    if os.getenv("FLASK_ENV") != "development":
+        return jsonify({"message": "Redeploy is not available in production"}), 403
+
     election = Election.query.get_or_404(election_id)
+
+    # Block only completed elections — votes already cast cannot be erased
+    if election.status == "completed":
+        return jsonify({"message": "Cannot redeploy a completed election"}), 403
+
     election.contract_address = None
     election.eligibility_locked = False
     election.candidates_locked = False

@@ -10,6 +10,8 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from app import db
 from app.models.election import Election
+from app.models.candidate import Candidate
+from app.models.constituency import Constituency
 from app.models.vote_transaction import VoteTransaction
 from app.models.voter_verification import VoterVerification
 from app.api.middleware import require_jwt
@@ -56,6 +58,27 @@ def confirm_vote():
     ).first()
     if not verification:
         return jsonify({"message": "Voter not verified for this election"}), 403
+
+    # Resolve the candidate by position within this election
+    candidate = (
+        Candidate.query
+        .join(Constituency, Candidate.constituency_id == Constituency.constituency_id)
+        .filter(
+            Constituency.election_id == election_id,
+            Candidate.candidate_position == int(candidate_id),
+            Candidate.status == "active",
+        )
+        .first()
+    )
+    if not candidate:
+        return jsonify({"message": "Invalid candidate for this election"}), 400
+
+    # For public elections: candidate must belong to the voter's verified constituency
+    if election.visibility_type == "public" and verification.constituency_id:
+        if candidate.constituency_id != verification.constituency_id:
+            return jsonify({
+                "message": "You can only vote for candidates in your own constituency"
+            }), 403
 
     # If this exact tx_hash was already recorded, treat as success (idempotent)
     existing = VoteTransaction.query.filter_by(blockchain_tx_hash=tx_hash).first()

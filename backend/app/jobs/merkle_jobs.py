@@ -256,7 +256,7 @@ def lock_election_pipeline(election_id: str) -> dict:
                 election_id, merkle_root, len(unique_candidate_ids)
             )
 
-        now = datetime.utcnow()
+        now = datetime.now()   # naive local — matches how start_time is stored
         election.eligibility_merkle_root = merkle_root
         election.merkle_tree_json = json.dumps(tree_data)
         election.eligibility_locked = True

@@ -57,17 +57,3 @@ def require_super_admin(f):
         g.role = payload["role"]
         return f(*args, **kwargs)
     return decorated
-
-
-def require_rc(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        payload, err = _extract_payload()
-        if err:
-            return err
-        if payload.get("role") != "result_committee":
-            return jsonify({"message": "Result Committee access required"}), 403
-        g.user_id = payload["sub"]
-        g.role = payload["role"]
-        return f(*args, **kwargs)
-    return decorated

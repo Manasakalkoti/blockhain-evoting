@@ -87,13 +87,17 @@ export async function castVote(
     gas: VOTE_GAS_LIMIT,
   }], onStatusChange);
 
-  // ── Step 5: Send tx hash to backend for audit trail ───────────────────────
+  // ── Step 5: Send tx hash to backend for audit trail (fire-and-forget) ──────
+  // The vote is already on-chain at this point. A DB write failure must not
+  // prevent the voter from seeing their tx hash and success screen.
   onStatusChange('Recording vote…');
-  await api.post('/api/votes/confirm', {
+  api.post('/api/votes/confirm', {
     election_id: electionId,
     tx_hash: txHash,
     candidate_id: candidatePosition,
     wallet_address: voterAddress.toLowerCase(),
+  }).catch((err) => {
+    console.warn('Vote confirm API failed (vote is still on-chain):', err?.response?.data?.message || err.message);
   });
 
   return txHash;

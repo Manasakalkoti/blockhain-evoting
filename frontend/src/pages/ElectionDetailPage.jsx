@@ -104,97 +104,293 @@ function PrivateVerification({ electionId, onVerified }) {
 
 // ── Public election verification ──────────────────────────────────────────────
 
+// Step 1: find constituency by district+pincode OR from dropdown
+// Step 2: verify with Aadhaar + full address for that constituency
 function PublicVerification({ electionId, election, user, onVerified }) {
+  const constituencies = election.constituencies || []
+
+  // Step 1 state
+  const [findDistrict, setFindDistrict] = useState('')
+  const [findPincode, setFindPincode] = useState('')
+  const [findLoading, setFindLoading] = useState(false)
+  const [findError, setFindError] = useState('')
+  const [showDropdown, setShowDropdown] = useState(false)
+
+  // Shared: which constituency was chosen (step 1 result or dropdown pick)
+  const [chosenConstituency, setChosenConstituency] = useState(null)
+
+  // Step 2 state
   const [form, setForm] = useState({
-    address_line: user?.address_line || '',
-    city: user?.city || '',
-    state: user?.state || '',
-    pincode: user?.pincode || '',
+    aadhaar_number: '',
+    address_line: '',
+    city: '',
+    state: '',
+    pincode: '',
   })
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [verifyLoading, setVerifyLoading] = useState(false)
+  const [verifyError, setVerifyError] = useState('')
 
-  function handleChange(e) {
-    setForm((f) => ({ ...f, [e.target.name]: e.target.value }))
-  }
-
-  async function submit(e) {
+  // ── Step 1a: auto-find by district + pincode (client-side match) ──────────
+  function handleAutoFind(e) {
     e.preventDefault()
-    if (!form.city.trim() && !form.pincode.trim()) {
-      setError('Please enter at least your city or pincode')
+    setFindError('')
+    const distLower = findDistrict.trim().toLowerCase()
+    const pin = findPincode.trim()
+    if (!distLower && !pin) {
+      setFindError('Enter at least a district or pincode.')
       return
     }
-    setLoading(true)
-    setError('')
+    setFindLoading(true)
+    const matched = constituencies.find(c => {
+      const rules = c.location_rules || {}
+      const cDist = (rules.districts || []).map(d => d.toLowerCase())
+      const cWards = (rules.wards || []).map(w => w.toLowerCase())
+      const cPins = rules.pincodes || []
+      return (
+        (pin && cPins.includes(pin))
+        || (distLower && cDist.includes(distLower))
+        || (distLower && cWards.includes(distLower))
+      )
+    })
+    setFindLoading(false)
+    if (!matched) {
+      setFindError('No constituency found for that district/pincode. Try browsing the list below.')
+      return
+    }
+    // Pre-fill city and pincode from what they searched
+    setForm(f => ({ ...f, city: findDistrict.trim(), pincode: findPincode.trim() }))
+    setChosenConstituency(matched)
+  }
+
+  function handleFormChange(e) {
+    const { name, value } = e.target
+    if (name === 'aadhaar_number') {
+      if (/^\d{0,12}$/.test(value)) setForm(f => ({ ...f, aadhaar_number: value }))
+      return
+    }
+    setForm(f => ({ ...f, [name]: value }))
+  }
+
+  // ── Step 2: submit full verification ─────────────────────────────────────
+  async function handleVerify(e) {
+    e.preventDefault()
+    if (form.aadhaar_number.length !== 12) { setVerifyError('Aadhaar must be exactly 12 digits'); return }
+    if (!form.address_line.trim()) { setVerifyError('Address line is required'); return }
+    if (!form.city.trim()) { setVerifyError('City / District is required'); return }
+    if (!form.state.trim()) { setVerifyError('State is required'); return }
+    if (!form.pincode.trim()) { setVerifyError('Pincode is required'); return }
+    setVerifyLoading(true)
+    setVerifyError('')
     try {
       await api.post(`/api/voter/elections/${electionId}/verify`, {
-        city: form.city.trim(),
-        state: form.state.trim(),
-        pincode: form.pincode.trim(),
-        address_line: form.address_line.trim(),
+        aadhaar_number: form.aadhaar_number,
+        address_line:  form.address_line.trim(),
+        city:          form.city.trim(),
+        state:         form.state.trim(),
+        pincode:       form.pincode.trim(),
       })
       onVerified()
     } catch (err) {
-      setError('The details entered are not eligible for voting in this election. Please enter correct details.')
+      setVerifyError(err.response?.data?.message || 'Verification failed. Check your details.')
     } finally {
-      setLoading(false)
+      setVerifyLoading(false)
     }
   }
 
-  const rules = election.location_rules
-  const eligible_zones = rules
-    ? [...(rules.districts || []), ...(rules.wards || []), ...(rules.pincodes || [])].join(', ')
-    : ''
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <form onSubmit={submit} className="mt-5 pt-5 border-t border-gray-100">
-      <p className="text-sm font-medium text-gray-700 mb-3">
-        Enter your address to verify geographic eligibility
+    <div className="mt-5 pt-5 border-t border-gray-100">
+      <p className="text-sm font-semibold text-gray-700 mb-1">Find Your Constituency</p>
+      <p className="text-xs text-gray-400 mb-4">
+        Enter your district and pincode to identify your constituency, then verify with Aadhaar.
       </p>
-      {eligible_zones && (
-        <p className="text-xs text-gray-400 mb-3">
-          Eligible zones: {eligible_zones}
-        </p>
+
+      {!chosenConstituency ? (
+        <>
+          {/* Step 1a: auto-find */}
+          <form onSubmit={handleAutoFind} className="space-y-2 mb-3">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                value={findDistrict}
+                onChange={e => setFindDistrict(e.target.value)}
+                placeholder="District / Ward *"
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <input
+                value={findPincode}
+                onChange={e => setFindPincode(e.target.value)}
+                placeholder="Pincode *"
+                inputMode="numeric"
+                maxLength={6}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={findLoading || (!findDistrict.trim() && !findPincode.trim())}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {findLoading ? 'Finding…' : 'Find My Constituency'}
+            </button>
+            {findError && <p className="text-red-500 text-xs mt-1">{findError}</p>}
+          </form>
+
+          {/* Step 1b: browse all constituencies with their candidates */}
+          <div className="border-t border-gray-100 pt-3">
+            <button
+              onClick={() => setShowDropdown(v => !v)}
+              className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+            >
+              {showDropdown ? '▲ Hide constituency list' : '▼ Browse all constituencies'}
+            </button>
+            {showDropdown && (
+              <div className="mt-3 space-y-3">
+                {constituencies.map(c => (
+                  <div key={c.constituency_id} className="border border-gray-200 rounded-xl overflow-hidden">
+                    {/* Constituency header — click to select */}
+                    <button
+                      onClick={() => { setChosenConstituency(c); setShowDropdown(false) }}
+                      className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-indigo-50 transition-colors flex items-center justify-between"
+                    >
+                      <div>
+                        <span className="font-semibold text-sm text-gray-800">{c.constituency_name}</span>
+                        {c.location_rules && (
+                          <span className="ml-2 text-xs text-gray-400">
+                            {[
+                              ...(c.location_rules.districts || []),
+                              ...(c.location_rules.wards || []),
+                              ...(c.location_rules.pincodes || []),
+                            ].slice(0, 3).join(', ')}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-indigo-600 font-medium shrink-0 ml-2">Select →</span>
+                    </button>
+
+                    {/* Candidates for this constituency */}
+                    {(c.candidates || []).length > 0 ? (
+                      <div className="divide-y divide-gray-100">
+                        {c.candidates.map(cand => (
+                          <div key={cand.candidate_id} className="px-4 py-2.5 flex items-center gap-3">
+                            <div className="w-7 h-7 rounded-full bg-indigo-50 flex items-center justify-center text-sm shrink-0">
+                              {cand.symbol_url || cand.candidate_name.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-700 truncate">{cand.candidate_name}</p>
+                              {cand.party_name && (
+                                <p className="text-xs text-indigo-500">{cand.party_name}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="px-4 py-2.5 text-xs text-gray-400">No candidates listed.</p>
+                    )}
+                  </div>
+                ))}
+                {constituencies.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-3">No constituencies configured yet.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* Step 2: verify */
+        <div>
+          {/* Chosen constituency banner */}
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-indigo-500 font-medium uppercase tracking-wide">Your Constituency</p>
+              <p className="text-sm font-semibold text-indigo-800 mt-0.5">{chosenConstituency.constituency_name}</p>
+            </div>
+            <button
+              onClick={() => { setChosenConstituency(null); setVerifyError('') }}
+              className="text-xs text-indigo-500 hover:text-indigo-700 underline"
+            >
+              Change
+            </button>
+          </div>
+
+          <p className="text-sm font-medium text-gray-700 mb-1">Step 2 — KYC Verification</p>
+          <p className="text-xs text-gray-400 mb-3">
+            Enter your Aadhaar and address to confirm you belong to this constituency.
+          </p>
+
+          <form onSubmit={handleVerify} className="space-y-2">
+            {/* Aadhaar */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Aadhaar Number <span className="text-red-500">*</span>
+              </label>
+              <input
+                name="aadhaar_number"
+                value={form.aadhaar_number}
+                onChange={handleFormChange}
+                placeholder="12-digit Aadhaar number"
+                maxLength={12}
+                inputMode="numeric"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm tracking-widest focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <p className="text-xs text-gray-400 mt-0.5">
+                {form.aadhaar_number.length}/12 digits
+                {form.aadhaar_number.length === 12 && <span className="text-green-600 ml-2">✓</span>}
+              </p>
+            </div>
+
+            {/* Address fields */}
+            <input
+              name="address_line"
+              value={form.address_line}
+              onChange={handleFormChange}
+              placeholder="Address line *"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                name="city"
+                value={form.city}
+                onChange={handleFormChange}
+                placeholder="City / District *"
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <input
+                name="state"
+                value={form.state}
+                onChange={handleFormChange}
+                placeholder="State *"
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <input
+                name="pincode"
+                value={form.pincode}
+                onChange={handleFormChange}
+                placeholder="Pincode *"
+                inputMode="numeric"
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={
+                verifyLoading ||
+                form.aadhaar_number.length !== 12 ||
+                !form.address_line.trim() ||
+                !form.city.trim() ||
+                !form.state.trim() ||
+                !form.pincode.trim()
+              }
+              className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {verifyLoading ? 'Verifying…' : 'Verify with Aadhaar'}
+            </button>
+            {verifyError && <p className="text-red-500 text-sm mt-2">{verifyError}</p>}
+          </form>
+        </div>
       )}
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <input
-          name="address_line"
-          value={form.address_line}
-          onChange={handleChange}
-          placeholder="Address line (optional)"
-          className="col-span-2 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-        />
-        <input
-          name="city"
-          value={form.city}
-          onChange={handleChange}
-          placeholder="City / District *"
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-        />
-        <input
-          name="state"
-          value={form.state}
-          onChange={handleChange}
-          placeholder="State"
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-        />
-        <input
-          name="pincode"
-          value={form.pincode}
-          onChange={handleChange}
-          placeholder="Pincode *"
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-        />
-      </div>
-      <button
-        type="submit"
-        disabled={loading || (!form.city.trim() && !form.pincode.trim())}
-        className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-      >
-        {loading ? 'Checking…' : 'Verify Eligibility'}
-      </button>
-      {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-    </form>
+    </div>
   )
 }
 
@@ -440,16 +636,36 @@ export default function ElectionDetailPage() {
           )}
         </div>
 
-        {/* Candidates */}
-        <h2 className="text-lg font-semibold text-gray-700 mb-3">Candidates</h2>
-        <div className="grid gap-3">
-          {(election.candidates || []).map((c) => (
-            <CandidateCard key={c.candidate_id} candidate={c} />
-          ))}
-          {(!election.candidates || election.candidates.length === 0) && (
-            <p className="text-gray-400 text-sm">No candidates listed yet.</p>
-          )}
-        </div>
+        {/* Candidates — filtered to verified constituency for public elections */}
+        {(() => {
+          const allCandidates = election.candidates || []
+          const vc = election.verified_constituency // null unless public + verified
+
+          const visibleCandidates = (isVerified && vc)
+            ? allCandidates.filter(c => c.constituency_id === vc.constituency_id)
+            : allCandidates
+
+          return (
+            <>
+              {isVerified && vc && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 mb-4">
+                  <p className="text-xs text-indigo-500 font-medium uppercase tracking-wide">Your Constituency</p>
+                  <p className="text-sm font-semibold text-indigo-800 mt-0.5">{vc.constituency_name}</p>
+                  <p className="text-xs text-indigo-600 mt-0.5">Showing candidates for your constituency only.</p>
+                </div>
+              )}
+              <h2 className="text-lg font-semibold text-gray-700 mb-3">Candidates</h2>
+              <div className="grid gap-3">
+                {visibleCandidates.map((c) => (
+                  <CandidateCard key={c.candidate_id} candidate={c} />
+                ))}
+                {visibleCandidates.length === 0 && (
+                  <p className="text-gray-400 text-sm">No candidates listed yet.</p>
+                )}
+              </div>
+            </>
+          )
+        })()}
       </div>
     </div>
   )

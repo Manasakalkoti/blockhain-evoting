@@ -11,7 +11,14 @@ from app.api.middleware import require_jwt
 
 auth_bp = Blueprint("auth", __name__)
 
-JWT_SECRET = os.getenv("SECRET_KEY", "dev-secret")
+JWT_SECRET = os.getenv("SECRET_KEY")
+if not JWT_SECRET:
+    raise RuntimeError("SECRET_KEY environment variable is not set. Cannot start server.")
+if JWT_SECRET in ("dev-secret", "dev-secret-key-change-in-production"):
+    import sys
+    if os.getenv("FLASK_ENV") != "development":
+        raise RuntimeError("Weak SECRET_KEY detected. Set a strong secret before deploying.")
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
 
@@ -108,8 +115,13 @@ def register_verify():
         email=email, purpose="voter_register", used=False
     ).order_by(EmailOtp.created_at.desc()).first()
 
-    if not record or not record.verify(otp):
+    if not record:
         return jsonify({"message": "Invalid or expired OTP"}), 400
+    if record.is_locked:
+        return jsonify({"message": "Too many failed attempts. Please request a new OTP."}), 429
+    if not record.verify(otp):
+        remaining = EmailOtp.MAX_ATTEMPTS - record.failed_attempts
+        return jsonify({"message": f"Invalid OTP. {remaining} attempt(s) remaining."}), 400
 
     record.consume()
 
@@ -166,8 +178,13 @@ def verify_login_otp():
         email=email, purpose="login", used=False
     ).order_by(EmailOtp.created_at.desc()).first()
 
-    if not record or not record.verify(otp):
+    if not record:
         return jsonify({"message": "Invalid or expired OTP"}), 400
+    if record.is_locked:
+        return jsonify({"message": "Too many failed attempts. Please request a new OTP."}), 429
+    if not record.verify(otp):
+        remaining = EmailOtp.MAX_ATTEMPTS - record.failed_attempts
+        return jsonify({"message": f"Invalid OTP. {remaining} attempt(s) remaining."}), 400
 
     record.consume()
 
@@ -231,8 +248,13 @@ def org_register_verify():
         email=email, purpose="org_register", used=False
     ).order_by(EmailOtp.created_at.desc()).first()
 
-    if not record or not record.verify(otp):
+    if not record:
         return jsonify({"message": "Invalid or expired OTP"}), 400
+    if record.is_locked:
+        return jsonify({"message": "Too many failed attempts. Please request a new OTP."}), 429
+    if not record.verify(otp):
+        remaining = EmailOtp.MAX_ATTEMPTS - record.failed_attempts
+        return jsonify({"message": f"Invalid OTP. {remaining} attempt(s) remaining."}), 400
 
     record.consume()
 
@@ -258,6 +280,9 @@ def org_register_verify():
 @auth_bp.route("/api/auth/wallet", methods=["PUT"])
 @require_jwt
 def link_wallet():
+    from app.models.vote_transaction import VoteTransaction
+    from app.models.election import Election
+
     data = request.get_json(silent=True) or {}
     wallet = (data.get("wallet_address") or "").strip().lower()
 
@@ -272,6 +297,17 @@ def link_wallet():
     ).first()
     if existing:
         return jsonify({"message": "This wallet address is already linked to another account"}), 409
+
+    # Block wallet change if voter has already voted in any active election
+    voted = VoteTransaction.query.filter_by(voter_id=g.user_id).first()
+    if voted:
+        active_election = Election.query.filter_by(
+            election_id=voted.election_id, status="active"
+        ).first()
+        if active_election:
+            return jsonify({
+                "message": "Cannot change wallet while you have voted in an active election"
+            }), 403
 
     user = User.query.get_or_404(g.user_id)
     user.wallet_address = wallet

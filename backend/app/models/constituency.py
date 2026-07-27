@@ -8,8 +8,10 @@ class Constituency(db.Model):
 
     constituency_id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     election_id = db.Column(db.String(36), db.ForeignKey("elections.election_id"), nullable=False)
+    constituency_code = db.Column(db.String(50), nullable=False)
     constituency_name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
+    location_rules = db.Column(db.Text, nullable=True)  # JSON: {districts, wards, pincodes}
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships

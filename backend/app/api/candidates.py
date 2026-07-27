@@ -53,10 +53,12 @@ def add_candidate(election_id):
         if not constituency:
             return jsonify({"message": "No constituency found for this election"}), 400
 
-    # Next display position
+    # Position must be globally unique within the election (not per-constituency)
+    # so the on-chain contract has a single unambiguous candidate list.
+    constituency_ids = [c.constituency_id for c in election.constituencies.all()]
     max_pos = (
         db.session.query(db.func.max(Candidate.candidate_position))
-        .filter_by(constituency_id=constituency.constituency_id)
+        .filter(Candidate.constituency_id.in_(constituency_ids))
         .scalar()
         or 0
     )

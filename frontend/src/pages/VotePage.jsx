@@ -4,10 +4,12 @@ import Navbar from '../components/Navbar'
 import api from '../api/client'
 import { castVote } from '../services/castVote'
 import { connectWallet, getConnectedAddress, checkHasVoted } from '../services/web3'
+import { useAuth } from '../context/AuthContext'
 
 export default function VotePage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { updateUser } = useAuth()
 
   const [election, setElection] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -52,6 +54,7 @@ export default function VotePage() {
       // Save wallet address to backend profile so Merkle proof generation works
       try {
         await api.put('/api/auth/wallet', { wallet_address: address })
+        updateUser({ wallet_address: address })
       } catch (saveErr) {
         // If already linked to this account, ignore — otherwise warn
         if (saveErr.response?.status !== 409) {
@@ -173,6 +176,13 @@ export default function VotePage() {
   const selectedCandidate = election?.candidates?.find((c) => c.candidate_id === selected)
   const hasContract = Boolean(election?.contract_address)
 
+  // For public elections: only show candidates from the voter's verified constituency.
+  // For private elections: show all candidates (single constituency or no restriction).
+  const verifiedConstituency = election?.verified_constituency ?? null
+  const visibleCandidates = (election?.visibility_type === 'public' && verifiedConstituency)
+    ? (election?.candidates || []).filter(c => c.constituency_id === verifiedConstituency.constituency_id)
+    : (election?.candidates || [])
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
@@ -221,9 +231,17 @@ export default function VotePage() {
           <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{error}</div>
         )}
 
-        {/* Candidate list */}
+        {/* Constituency badge for public elections */}
+        {verifiedConstituency && (
+          <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 flex items-center gap-2">
+            <span className="text-xs text-indigo-500 font-medium uppercase tracking-wide">Your Constituency</span>
+            <span className="text-sm font-semibold text-indigo-800">{verifiedConstituency.constituency_name}</span>
+          </div>
+        )}
+
+        {/* Candidate list — filtered to verified constituency for public elections */}
         <div className="grid gap-3 mb-6">
-          {(election?.candidates || []).map((c) => (
+          {visibleCandidates.map((c) => (
             <button
               key={c.candidate_id}
               onClick={() => !alreadyVoted && setSelected(c.candidate_id)}
@@ -235,7 +253,7 @@ export default function VotePage() {
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm shrink-0">
-                {c.candidate_name.charAt(0)}
+                {c.symbol_url || c.candidate_name.charAt(0)}
               </div>
               <div>
                 <p className="font-medium text-gray-800">{c.candidate_name}</p>
@@ -246,6 +264,9 @@ export default function VotePage() {
               )}
             </button>
           ))}
+          {visibleCandidates.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-6">No candidates found for your constituency.</p>
+          )}
         </div>
 
         <button

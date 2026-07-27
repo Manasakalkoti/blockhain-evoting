@@ -13,7 +13,7 @@ class User(db.Model):
     phone_number = db.Column(db.String(20))
     aadhaar_hash = db.Column(db.String(255))
     firebase_uid = db.Column(db.String(128), unique=True)
-    role = db.Column(db.Enum("super_admin", "admin", "result_committee", "voter"), nullable=False, default="voter")
+    role = db.Column(db.Enum("super_admin", "admin", "voter"), nullable=False, default="voter")
     wallet_address = db.Column(db.String(42))
     
     

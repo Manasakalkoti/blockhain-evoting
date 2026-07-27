@@ -19,11 +19,14 @@ class VoterVerification(db.Model):
     )
     verified = db.Column(db.Boolean, default=False, nullable=False)
     verified_at = db.Column(db.DateTime)
+    aadhaar_hash = db.Column(db.String(64), nullable=True)
+    constituency_id = db.Column(db.String(36), db.ForeignKey("constituencies.constituency_id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
     user = db.relationship("User", back_populates="voter_verifications")
     election = db.relationship("Election", back_populates="voter_verifications")
+    constituency = db.relationship("Constituency", backref="voter_verifications")
 
     def __repr__(self):
         return f"<VoterVerification user={self.user_id} election={self.election_id} verified={self.verified}>"

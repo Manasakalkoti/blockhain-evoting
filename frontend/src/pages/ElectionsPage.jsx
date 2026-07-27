@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
-import { connectWallet } from '../services/web3'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -19,38 +18,6 @@ function timeUntil(dateStr) {
 
 // ── Wallet Banner ─────────────────────────────────────────────────────────────
 
-function WalletBanner({ onLinked }) {
-  const [linking, setLinking] = useState(false)
-
-  async function handleLink() {
-    setLinking(true)
-    try {
-      const { address } = await connectWallet()
-      await api.put('/api/auth/wallet', { wallet_address: address })
-      onLinked(address)
-    } catch {
-      alert('Could not connect MetaMask. Make sure it is installed and unlocked.')
-    } finally {
-      setLinking(false)
-    }
-  }
-
-  return (
-    <div className="flex items-center justify-between gap-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-6">
-      <div>
-        <p className="text-sm font-semibold text-amber-800">Wallet not linked</p>
-        <p className="text-xs text-amber-700 mt-0.5">Link your MetaMask wallet now to be ready to vote when elections open.</p>
-      </div>
-      <button
-        onClick={handleLink}
-        disabled={linking}
-        className="shrink-0 bg-amber-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-50"
-      >
-        {linking ? 'Connecting…' : 'Link Wallet'}
-      </button>
-    </div>
-  )
-}
 
 // ── Election Card ─────────────────────────────────────────────────────────────
 
@@ -124,7 +91,7 @@ function FollowedOrgCard({ org, onSelect, onUnfollow }) {
         </div>
       </div>
       {org.elections.length === 0 ? (
-        <p className="text-xs text-gray-400">No active or upcoming elections.</p>
+        <p className="text-xs text-gray-400">No elections yet.</p>
       ) : (
         <div className="space-y-2">
           {org.elections.map((e) => {
@@ -137,10 +104,11 @@ function FollowedOrgCard({ org, onSelect, onUnfollow }) {
               >
                 <span className="text-gray-700 font-medium truncate">{e.title}</span>
                 <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                  {until && <span className="text-blue-600">Starts in {until}</span>}
                   {e.status === 'active' && <span className="text-green-600 font-semibold">● Live</span>}
+                  {e.status === 'scheduled' && until && <span className="text-blue-600">In {until}</span>}
+                  {e.status === 'scheduled' && !until && <span className="text-blue-600">Upcoming</span>}
+                  {e.status === 'completed' && <span className="text-gray-400">Completed</span>}
                   {e.verification_status === 'verified' && <span className="text-green-600">✓</span>}
-                  {!e.verification_status && <span className="text-yellow-600">Pre-check</span>}
                 </div>
               </Link>
             )
@@ -154,7 +122,7 @@ function FollowedOrgCard({ org, onSelect, onUnfollow }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ElectionsPage() {
-  const { user, setUser } = useAuth()
+  const { user } = useAuth()
   const navigate = useNavigate()
 
   const [orgQuery, setOrgQuery] = useState('')
@@ -166,7 +134,6 @@ export default function ElectionsPage() {
   const [loadingElections, setLoadingElections] = useState(false)
   const [loadingFollowing, setLoadingFollowing] = useState(true)
   const [error, setError] = useState('')
-  const [hasWallet, setHasWallet] = useState(!!user?.wallet_address)
 
   // Load followed orgs on mount
   useEffect(() => {
@@ -232,10 +199,6 @@ export default function ElectionsPage() {
       <Navbar />
       <div className="max-w-3xl mx-auto px-4 py-8">
 
-        {/* Wallet Banner */}
-        {!hasWallet && (
-          <WalletBanner onLinked={() => setHasWallet(true)} />
-        )}
 
         <h1 className="text-2xl font-bold text-gray-800 mb-2">Elections</h1>
 

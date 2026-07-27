@@ -35,17 +35,15 @@ export default function SuperAdminDashboardPage() {
     setMemberForm((f) => ({ ...f, [e.target.name]: e.target.value }))
   }
 
-  async function handleAddMember(role) {
+  async function handleAddMember() {
     setFormError('')
     setFormSuccess('')
     setFormLoading(true)
     try {
-      const endpoint = role === 'admin' ? '/api/org/admins' : '/api/org/rc-members'
-      await api.post(endpoint, memberForm)
-      setFormSuccess(`${role === 'admin' ? 'Admin' : 'RC Member'} added successfully`)
+      await api.post('/api/org/admins', memberForm)
+      setFormSuccess('Admin added successfully')
       setMemberForm({ full_name: '', email: '', password: '' })
       setShowAdminForm(false)
-      setShowRcForm(false)
       fetchOrg()
     } catch (err) {
       setFormError(err.response?.data?.message || 'Failed to add member')
@@ -86,6 +84,9 @@ export default function SuperAdminDashboardPage() {
   if (error) return <div className="p-8 text-red-500">{error}</div>
 
   const { organization, admins, elections, followers } = org
+  const activeElections    = elections.filter(e => e.status === 'active')
+  const upcomingElections  = elections.filter(e => e.status === 'scheduled' || e.status === 'draft')
+  const completedElections = elections.filter(e => e.status === 'completed')
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -168,7 +169,7 @@ export default function SuperAdminDashboardPage() {
               <input name="password" type="password" placeholder="Temporary password" value={memberForm.password}
                 onChange={handleMemberChange}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              <button onClick={() => handleAddMember('admin')} disabled={formLoading}
+              <button onClick={() => handleAddMember()} disabled={formLoading}
                 className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
                 {formLoading ? 'Creating…' : 'Create Admin'}
               </button>
@@ -215,19 +216,65 @@ export default function SuperAdminDashboardPage() {
           {elections.length === 0 ? (
             <p className="text-sm text-gray-400">No elections yet. Your admins can create them.</p>
           ) : (
-            <div className="space-y-2">
-              {elections.map((e) => (
-                <div key={e.election_id} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex justify-between items-center">
-                  <p className="text-sm font-medium text-gray-800">{e.title}</p>
-                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                    e.status === 'active' ? 'bg-green-100 text-green-700' :
-                    e.status === 'completed' ? 'bg-gray-100 text-gray-600' :
-                    'bg-yellow-100 text-yellow-700'
-                  }`}>
-                    {e.status}
-                  </span>
+            <div className="space-y-6">
+              {activeElections.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Live Now</p>
+                  </div>
+                  <div className="space-y-2">
+                    {activeElections.map(e => (
+                      <div key={e.election_id} className="bg-white rounded-xl border border-green-100 px-4 py-3 flex justify-between items-center">
+                        <p className="text-sm font-medium text-gray-800">{e.title}</p>
+                        <span className="text-xs px-2 py-1 rounded-full font-medium bg-green-100 text-green-700">● Active</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
+
+              {upcomingElections.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Upcoming</p>
+                  </div>
+                  <div className="space-y-2">
+                    {upcomingElections.map(e => (
+                      <div key={e.election_id} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex justify-between items-center">
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{e.title}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{new Date(e.start_time).toLocaleString()} → {new Date(e.end_time).toLocaleString()}</p>
+                        </div>
+                        <span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-50 text-blue-600">
+                          {e.status === 'draft' ? 'Draft' : 'Scheduled'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {completedElections.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-400" />
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Completed</p>
+                  </div>
+                  <div className="space-y-2">
+                    {completedElections.map(e => (
+                      <div key={e.election_id} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex justify-between items-center">
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{e.title}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Ended {new Date(e.end_time).toLocaleString()}</p>
+                        </div>
+                        <span className="text-xs px-2 py-1 rounded-full font-medium bg-gray-100 text-gray-500">Completed</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
