@@ -24,29 +24,25 @@ function timeUntil(dateStr) {
 function ElectionCard({ election }) {
   const verif = election.verification_status
   const until = election.status === 'scheduled' ? timeUntil(election.start_time) : null
+  const showResults = election.status === 'active' || election.status === 'completed'
 
   return (
-    <Link
-      to={`/elections/${election.election_id}`}
-      className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition block"
-    >
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
+        <Link to={`/elections/${election.election_id}`} className="flex-1 min-w-0">
           <h3 className="font-semibold text-gray-800 truncate">{election.title}</h3>
           <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
             <span>{new Date(election.start_time).toLocaleString()}</span>
             <span>→</span>
             <span>{new Date(election.end_time).toLocaleString()}</span>
           </div>
-        </div>
+        </Link>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
-          {/* Upcoming alert */}
           {until && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
               Starts in {until}
             </span>
           )}
-          {/* Verification badge */}
           {verif === 'verified' && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Verified</span>
           )}
@@ -59,9 +55,17 @@ function ElectionCard({ election }) {
           {!verif && election.status === 'active' && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700 font-medium">Verify to vote</span>
           )}
+          {showResults && (
+            <Link
+              to={`/results/${election.election_id}`}
+              className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium hover:bg-indigo-100"
+            >
+              {election.status === 'active' ? '● Live Results' : 'View Results'}
+            </Link>
+          )}
         </div>
       </div>
-    </Link>
+    </div>
   )
 }
 
@@ -97,20 +101,26 @@ function FollowedOrgCard({ org, onSelect, onUnfollow }) {
           {org.elections.map((e) => {
             const until = e.status === 'scheduled' ? timeUntil(e.start_time) : null
             return (
-              <Link
+              <div
                 key={e.election_id}
-                to={`/elections/${e.election_id}`}
-                className="flex items-center justify-between text-xs bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2 transition"
+                className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-3 py-2"
               >
-                <span className="text-gray-700 font-medium truncate">{e.title}</span>
+                <Link to={`/elections/${e.election_id}`} className="text-gray-700 font-medium truncate hover:text-indigo-600">
+                  {e.title}
+                </Link>
                 <div className="flex items-center gap-1.5 shrink-0 ml-2">
                   {e.status === 'active' && <span className="text-green-600 font-semibold">● Live</span>}
                   {e.status === 'scheduled' && until && <span className="text-blue-600">In {until}</span>}
                   {e.status === 'scheduled' && !until && <span className="text-blue-600">Upcoming</span>}
                   {e.status === 'completed' && <span className="text-gray-400">Completed</span>}
                   {e.verification_status === 'verified' && <span className="text-green-600">✓</span>}
+                  {(e.status === 'active' || e.status === 'completed') && (
+                    <Link to={`/results/${e.election_id}`} className="text-indigo-600 hover:underline font-medium">
+                      Results →
+                    </Link>
+                  )}
                 </div>
-              </Link>
+              </div>
             )
           })}
         </div>
