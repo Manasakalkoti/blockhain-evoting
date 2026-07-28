@@ -57,3 +57,7 @@ cache/
 
 # PDFs and docs
 *.pdf
+
+# Personal study notes (not part of the product repo)
+docs/interview-prep.md
+docs/study.md
