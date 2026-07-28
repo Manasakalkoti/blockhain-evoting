@@ -20,9 +20,9 @@ Campus and organizational elections today run on trust in whoever administers th
 ```
 React (MetaMask + ethers.js)
     │
-    ├── Firebase OTP → JWT ──────────► Flask API ──► MySQL
-    │                                  (identity, elections,
-    │                                   candidates, eligibility)
+    ├──  → JWT ──────────► Flask API ──► MySQL
+    │                     (identity, elections,
+    │                   candidates, eligibility)
     │
     └── Signed tx ───────────────────► Ethereum Smart Contract
                                         (vote storage, tallying,
@@ -47,7 +47,7 @@ React (MetaMask + ethers.js)
 | Frontend | React (Vite), ethers.js, MetaMask, TailwindCSS |
 | Backend API | Python / Flask, SQLAlchemy, Flask-Migrate |
 | Database | MySQL (SQLite fallback for local dev) |
-| Auth | Firebase Phone OTP → JWT |
+| Auth | Phone OTP → JWT |
 | Blockchain | Solidity, Hardhat, web3.py |
 | Background jobs | Redis + RQ (Merkle tree generation, contract deployment, geocoding) |
 | Geospatial | Shapely (public-election boundary checks) |
