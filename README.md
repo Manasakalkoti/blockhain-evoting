@@ -47,7 +47,7 @@ React (MetaMask + ethers.js)
 | Frontend | React (Vite), ethers.js, MetaMask, TailwindCSS |
 | Backend API | Python / Flask, SQLAlchemy, Flask-Migrate |
 | Database | MySQL (SQLite fallback for local dev) |
-| Auth | Firebase Phone OTP → JWT |
+| Auth | Phone OTP → JWT |
 | Blockchain | Solidity, Hardhat, web3.py |
 | Background jobs | Redis + RQ (Merkle tree generation, contract deployment, geocoding) |
 | Geospatial | Shapely (public-election boundary checks) |
