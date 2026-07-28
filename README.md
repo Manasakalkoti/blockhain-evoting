@@ -20,9 +20,9 @@ Campus and organizational elections today run on trust in whoever administers th
 ```
 React (MetaMask + ethers.js)
     │
-    ├── Firebase OTP → JWT ──────────► Flask API ──► MySQL
-    │                                  (identity, elections,
-    │                                   candidates, eligibility)
+    ├──  → JWT ──────────► Flask API ──► MySQL
+    │                     (identity, elections,
+    │                   candidates, eligibility)
     │
     └── Signed tx ───────────────────► Ethereum Smart Contract
                                         (vote storage, tallying,
