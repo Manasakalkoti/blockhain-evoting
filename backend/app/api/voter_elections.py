@@ -626,7 +626,15 @@ def get_election_results(election_id):
         if pos in candidate_map:
             candidate_map[pos]["votes"] += 1
 
+    # DB tally, kept separate from on-chain so the two can be compared for the
+    # integrity check below (independent of the candidate_map display values).
+    db_tally = {}
+    for tx in transactions:
+        pos = str(tx.candidate_id)
+        db_tally[pos] = db_tally.get(pos, 0) + 1
+
     # Try to fetch on-chain results (more authoritative)
+    integrity_verified = None  # None = could not check, True/False = checked
     blockchain_enabled = os.environ.get("BLOCKCHAIN_ENABLED", "false").lower() == "true"
     if blockchain_enabled and election.contract_address:
         try:
@@ -634,8 +642,9 @@ def get_election_results(election_id):
             for position_str, count in on_chain_counts.items():
                 if position_str in candidate_map:
                     candidate_map[position_str]["votes"] = count
+            integrity_verified = (on_chain_counts == db_tally)
         except Exception:
-            pass  # fall back to DB counts silently
+            pass  # fall back to DB counts silently; integrity stays unverifiable
 
     # Build per-constituency result groups
     result_constituencies = []
@@ -670,6 +679,7 @@ def get_election_results(election_id):
             for tx in transactions
         ],
         "total_votes": total_votes,
+        "integrity_verified": integrity_verified,
     })
 
 
